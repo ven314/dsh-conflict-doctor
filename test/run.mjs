@@ -7,12 +7,20 @@
  *          read actual patch layers and produce a report without throwing.
  * Part C —integration: the plugin's `apply()` loads into a real Cordis
  *          container and registers its tool and command.
+ * Part D —asar reader. Builds throwaway archives with the byte layout Electron
+ *          produces and asserts the decoder handles the two surprises a real
+ *          archive handed us (offsets relative to the end of the tree, and
+ *          size/offset written as strings). Kept synthetic rather than shipped
+ *          so the test proves the decoder, not a committed binary.
  *
  * Run: node test/run.mjs
  */
 import assert from 'node:assert/strict'
-import { join } from 'node:path'
+import { join, resolve } from 'node:path'
+import { mkdtempSync, rmSync, writeFileSync } from 'node:fs'
+import { tmpdir } from 'node:os'
 import { Context, Service } from '@deepseek-ai/cordis'
+import { closeAsar, findNode, hasAsarPath, isAsarDir, listAsarDir, openAsar, readAsarFile, readAsarText } from '../lib/asar.js'
 import {
   collectStatic,
   defaultProfilePath,
@@ -729,6 +737,126 @@ await check('C8 unload retracts tool, command, and alert (ctx.effect ownership)'
   assert.equal(sink.commands.length, 0, 'commands still registered')
   assert.equal(sink.promptContexts.length, 0, 'prompt context still registered')
 })
+
+/* ------------------------------------------------------------------ Part D */
+
+/**
+ * Build a minimal archive with Electron's layout: 16-byte pickle prefix, JSON
+ * tree, then content addressed by offsets relative to the end of the tree.
+ *
+ * The u32 header-size field is written EIGHT BYTES SHORT on purpose — that is
+ * exactly how a real archive behaves, and any implementation trusting the field
+ * instead of brace-matching the tree must fail these checks.
+ */
+function buildAsar(files, { stringOffsets = false } = {}) {
+  const tree = { files: {} }
+  const blobs = []
+  let cursor = 0
+  for (const [name, content] of Object.entries(files)) {
+    const buf = Buffer.from(content, 'utf8')
+    tree.files[name] = {
+      size: stringOffsets ? String(buf.length) : buf.length,
+      offset: stringOffsets ? String(cursor) : cursor,
+    }
+    blobs.push(buf)
+    cursor += buf.length
+  }
+  const treeJson = JSON.stringify(tree)
+  const prefix = Buffer.alloc(16)
+  prefix.writeUInt32LE(8 + 16 + treeJson.length, 4)
+  return Buffer.concat([prefix, Buffer.from(treeJson, 'utf8'), ...blobs])
+}
+
+const asarDir = mkdtempSync(join(tmpdir(), 'cd-asar-'))
+const asarFileOf = (name) => join(asarDir, `${name}.asar`)
+
+await check('D1 reads a file from a hand-built archive', () => {
+  const file = asarFileOf('basic')
+  writeFileSync(file, buildAsar({ 'package.json': '{"name":"demo","version":"1.2.3"}' }))
+  const archive = openAsar(file)
+  assert.deepEqual(JSON.parse(readAsarText(archive, 'package.json')), { name: 'demo', version: '1.2.3' })
+  closeAsar(archive)
+})
+
+await check('D2 size/offset written as strings still decode', () => {
+  const file = asarFileOf('strings')
+  writeFileSync(file, buildAsar({ 'a.txt': 'first', 'b.txt': 'second' }, { stringOffsets: true }))
+  const archive = openAsar(file)
+  assert.equal(readAsarText(archive, 'a.txt'), 'first')
+  assert.equal(readAsarText(archive, 'b.txt'), 'second')
+  closeAsar(archive)
+})
+
+await check('D3 adjacent files do not bleed into each other', () => {
+  // The regression this guards: trusting the header-size u32 placed every read
+  // eight bytes off, returning the tail of a neighbouring file's JSON.
+  const file = asarFileOf('multi')
+  writeFileSync(file, buildAsar({ 'a.json': '{"alpha":true}', 'b.json': '{"beta":false}', 'c.json': '{"gamma":null}' }))
+  const archive = openAsar(file)
+  assert.deepEqual(JSON.parse(readAsarText(archive, 'a.json')), { alpha: true })
+  assert.deepEqual(JSON.parse(readAsarText(archive, 'b.json')), { beta: false })
+  assert.deepEqual(JSON.parse(readAsarText(archive, 'c.json')), { gamma: null })
+  closeAsar(archive)
+})
+
+await check('D4 multi-byte UTF-8 survives the byte maths', () => {
+  const file = asarFileOf('utf8')
+  writeFileSync(file, buildAsar({ 'zh.txt': '插件冲突诊断与修复建议 —— 中文 ñ é' }))
+  const archive = openAsar(file)
+  assert.equal(readAsarText(archive, 'zh.txt'), '插件冲突诊断与修复建议 —— 中文 ñ é')
+  closeAsar(archive)
+})
+
+await check('D5 nested directories resolve and directory nodes are not files', () => {
+  const tree = { files: { lib: { files: { 'index.js': { size: 5, offset: 0 } } } } }
+  const prefix = Buffer.alloc(16)
+  prefix.writeUInt32LE(16, 4)
+  const file = asarFileOf('nested')
+  writeFileSync(file, Buffer.concat([prefix, Buffer.from(JSON.stringify(tree), 'utf8'), Buffer.from('hello', 'utf8')]))
+  const archive = openAsar(file)
+  assert.equal(readAsarText(archive, 'lib/index.js'), 'hello')
+  assert.ok(isAsarDir(findNode(archive, 'lib')))
+  assert.equal(readAsarFile(archive, 'lib'), undefined, 'a directory must not be readable as a file')
+  assert.deepEqual(
+    listAsarDir(archive, 'lib').map(([name]) => name),
+    ['index.js'],
+  )
+  closeAsar(archive)
+})
+
+await check('D6 a traversal attempt cannot escape the archive root', () => {
+  const file = asarFileOf('escape')
+  writeFileSync(file, buildAsar({ 'package.json': '{"name":"demo"}' }))
+  const archive = openAsar(file)
+  assert.equal(hasAsarPath(archive, '../../etc/passwd'), false)
+  assert.equal(readAsarFile(archive, '../../etc/passwd'), undefined)
+  closeAsar(archive)
+})
+
+await check('D7 a missing path yields undefined rather than throwing', () => {
+  const file = asarFileOf('missing')
+  writeFileSync(file, buildAsar({ 'exists.txt': 'yes' }))
+  const archive = openAsar(file)
+  assert.equal(readAsarText(archive, 'nope.txt'), undefined)
+  assert.equal(findNode(archive, 'nope.txt'), undefined)
+  closeAsar(archive)
+})
+
+await check('D8 a non-asar file throws a readable error instead of crashing', () => {
+  const file = asarFileOf('corrupt')
+  writeFileSync(file, Buffer.from('not an asar at all, far too short'))
+  assert.throws(() => openAsar(file), Error)
+})
+
+await check('D9 closing twice is harmless', () => {
+  const file = asarFileOf('close')
+  writeFileSync(file, buildAsar({ 'a.txt': 'x' }))
+  const archive = openAsar(file)
+  closeAsar(archive)
+  closeAsar(archive)
+})
+
+rmSync(asarDir, { recursive: true, force: true })
 
 /* ------------------------------------------------------------------ report */
 
