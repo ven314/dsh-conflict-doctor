@@ -35,6 +35,14 @@
     "doctor"
   ],
   "license": "MIT",
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/ven314/dsh-conflict-doctor.git"
+  },
+  "homepage": "https://github.com/ven314/dsh-conflict-doctor#readme",
+  "bugs": {
+    "url": "https://github.com/ven314/dsh-conflict-doctor/issues"
+  },
   "engines": {
     "node": ">=22.19.0",
     "dsh": ">=0.1.0-rc.6 <0.3.0-0 || >=0.2.0-rc.1 <0.3.0-0"
