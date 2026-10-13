@@ -1,0 +1,6 @@
+# The conflict-doctor bundle patch: one row, addressed by the id `conflict-doctor`.
+# A profile that wants the audit tool plus the `/conflict-doctor` command only has
+# to list this package in `dsh.profile.bundles`.
+- insert:
+    - id: conflict-doctor
+      name: 'dsh-conflict-doctor'

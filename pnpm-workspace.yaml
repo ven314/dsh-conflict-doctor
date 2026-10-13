@@ -1,0 +1,5 @@
+# pnpm auto-installs peers and hard-fails on the unpublished peer
+# `@deepseek-ai/dsh-type-meta` declared by @deepseek-ai/dsh-session.
+# npm skips it gracefully; this override keeps pnpm installs working.
+overrides:
+  "@deepseek-ai/dsh-type-meta": "npm:@deepseek-ai/dsh-invariants@0.0.1-rc.1"

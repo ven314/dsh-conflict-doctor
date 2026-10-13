@@ -1,0 +1,69 @@
+{
+  "name": "dsh-conflict-doctor",
+  "version": "0.1.0",
+  "description": "DSH plugin conflict governance: builds a live capability graph of the running Loader profile, detects cross-plugin conflicts (duplicate loader rows, tool-id collisions, services a plugin waits for forever, dangling disables, version skew), and emits the exact patch to fix each one. · DSH 插件冲突诊断与修复建议：把「插件为什么不生效 / 谁和谁撞了」变成一条可执行结论。",
+  "type": "module",
+  "main": "lib/index.js",
+  "types": "lib/index.d.ts",
+  "exports": {
+    ".": {
+      "types": "./lib/index.d.ts",
+      "default": "./lib/index.js"
+    },
+    "./package.json": "./package.json"
+  },
+  "files": [
+    "lib",
+    "cordis.patch.yml",
+    "README.md",
+    "LICENSE"
+  ],
+  "scripts": {
+    "build": "tsc -p tsconfig.json",
+    "test": "node test/run.mjs",
+    "prepublishOnly": "pnpm build && pnpm test"
+  },
+  "keywords": [
+    "dsh-plugin",
+    "deepseek-harness",
+    "dsh",
+    "cordis",
+    "plugin-conflict",
+    "conflict-detection",
+    "diagnostics",
+    "capability-graph",
+    "doctor"
+  ],
+  "license": "MIT",
+  "engines": {
+    "node": ">=22.19.0",
+    "dsh": ">=0.1.0-rc.6 <0.3.0-0 || >=0.2.0-rc.1 <0.3.0-0"
+  },
+  "dependencies": {
+    "semver": "^7.6.0",
+    "yaml": "^2.4.0"
+  },
+  "peerDependencies": {
+    "@deepseek-ai/cordis": ">=4.0.0",
+    "@deepseek-ai/dsh-tools": ">=0.1.0-rc.6"
+  },
+  "devDependencies": {
+    "@deepseek-ai/cordis": "^4.0.1",
+    "@deepseek-ai/dsh-tools": "0.1.0-rc.6",
+    "@types/node": "^22.0.0",
+    "@types/semver": "^7.5.8",
+    "typescript": "^5.6.0"
+  },
+  "dsh": {
+    "bundle": {
+      "patch": "./cordis.patch.yml"
+    },
+    "compatibility": {
+      "dshReleases": {
+        "0.1.0-rc.6": "compatible",
+        "0.1.7-rc.2": "compatible",
+        "0.2.0-rc.2": "compatible"
+      }
+    }
+  }
+}
