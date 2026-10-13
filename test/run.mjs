@@ -21,6 +21,8 @@ import { mkdtempSync, rmSync, writeFileSync } from 'node:fs'
 import { tmpdir } from 'node:os'
 import { Context, Service } from '@deepseek-ai/cordis'
 import { closeAsar, findNode, hasAsarPath, isAsarDir, listAsarDir, openAsar, readAsarFile, readAsarText } from '../lib/asar.js'
+import { readHostSurface } from '../lib/hostface.js'
+import { collectSurface } from '../lib/surface.js'
 import {
   collectStatic,
   defaultProfilePath,
@@ -857,6 +859,191 @@ await check('D9 closing twice is harmless', () => {
 })
 
 rmSync(asarDir, { recursive: true, force: true })
+
+/* ------------------------------------------------------------------ Part E */
+
+/**
+ * Build an in-memory package tree for surface walking.
+ *
+ * Mirrors real bundled packages including the two traps met on the installed
+ * archive: manifest paths written as `./lib/index.js`, and an `exports` map
+ * whose `types` member does not exist in a shipped build.
+ */
+function memSource(files) {
+  // Keep everything NORMALISED ABSOLUTE with no trailing slash, and derive the
+  // rest from that single representation. Earlier attempts mixed slash/no-slash
+  // forms, and the resulting prefix comparisons silently mismatched.
+  const norm = (p) => {
+    const out = []
+    for (const part of p.split('/')) {
+      if (part === '' || part === '.') continue
+      if (part === '..') out.pop()
+      else out.push(part)
+    }
+    return out.join('/')
+  }
+  const ROOT = 'p'
+  const store = new Map()
+  for (const [key, value] of Object.entries(files)) store.set(norm(`${ROOT}/${key}`), value)
+  const keys = [...store.keys()]
+
+  /**
+   * Callers pass paths that are ALREADY rooted at the package (for example
+   * `p/lib/index.js`), while fixture keys are written root-relative. Accept
+   * both, and always return the canonical `p/...` form.
+   */
+  const abs = (p) => {
+    const cleaned = norm(p)
+    if (cleaned === ROOT) return ROOT
+    if (cleaned.startsWith(`${ROOT}/`)) return cleaned
+    return norm(`${ROOT}/${cleaned}`)
+  }
+
+  return {
+    hasFile: (p) => {
+      const full = abs(p)
+      return full === undefined ? false : store.has(full)
+    },
+    hasDir: (p) => {
+      const full = abs(p)
+      if (full === undefined) return false
+      return keys.some((k) => k.startsWith(`${full}/`))
+    },
+    readText: (p) => {
+      const full = abs(p)
+      return full === undefined ? undefined : store.get(full)
+    },
+    listDir: (p) => {
+      const full = abs(p)
+      if (full === undefined) return []
+      const prefix = `${full}/`
+      const seen = new Set()
+      for (const key of keys) {
+        if (!key.startsWith(prefix)) continue
+        const rest = key.slice(prefix.length)
+        if (rest.length === 0) continue
+        seen.add(rest.includes('/') ? rest.slice(0, rest.indexOf('/')) : rest)
+      }
+      return [...seen]
+    },
+  }
+}
+
+await check('E1 resolves an entry through a manifest "./" path', () => {
+  // Regression: naive concatenation produced `pkg/./lib/index.js`, which made
+  // the walker read package.json as its entry and report EVERY host symbol
+  // missing — the exact false-positive class W1 removes.
+  const source = memSource({
+    'package.json': '{"name":"p","main":"./lib/index.js"}',
+    'lib/index.js': 'export { alpha, beta };\nconst alpha = 1;\nconst beta = 2;',
+  })
+  const surface = collectSurface(source, 'p', { name: 'p', main: './lib/index.js' })
+  assert.equal(surface.source, 'js-entry')
+  assert.equal(surface.entry, 'p/lib/index.js')
+  assert.ok(surface.names.has('alpha'))
+  assert.ok(surface.names.has('beta'))
+})
+
+await check('E2 falls back to the JS entry when exports.types is absent', () => {
+  const source = memSource({
+    'package.json': '{"exports":{".":{"types":"./lib/types/index.d.ts","default":"./lib/index.js"}}}',
+    'lib/index.js': 'export { thing };',
+  })
+  const surface = collectSurface(source, 'p', {
+    exports: { '.': { types: './lib/types/index.d.ts', default: './lib/index.js' } },
+  })
+  assert.equal(surface.source, 'js-entry')
+  assert.ok(surface.names.has('thing'))
+})
+
+await check('E3 a mixed export list keeps every name', () => {
+  // `B as default` exports the name `default`; `B` itself stays LOCAL and is
+  // not importable. Asserting B would have encoded a false positive.
+  const source = memSource({ 'package.json': '{"main":"index.js"}', 'index.js': 'export { A, B as default, C };' })
+  const surface = collectSurface(source, 'p', { main: 'index.js' })
+  assert.ok(surface.names.has('A'), 'A must survive an aliased neighbour')
+  assert.ok(surface.names.has('C'), 'C must survive an aliased neighbour')
+  assert.ok(surface.names.has('default'), 'B as default must register the default name')
+  assert.equal(surface.names.has('B'), false, 'B is the local binding, not an exported name')
+})
+
+await check('E4 follows export * through the relative closure', () => {
+  const source = memSource({
+    'package.json': '{"main":"index.js"}',
+    'index.js': "export * from './deep/more.js';\nexport { top };",
+    'deep/more.js': 'export { nested };',
+  })
+  const surface = collectSurface(source, 'p', { main: 'index.js' })
+  assert.ok(surface.names.has('top'))
+  assert.ok(surface.names.has('nested'), 'a re-exported name really is exported by this package')
+  assert.ok(surface.filesScanned >= 2, 'the closure must actually be walked')
+})
+
+await check('E5 a re-export cycle terminates', () => {
+  const source = memSource({
+    'package.json': '{"main":"a.js"}',
+    'a.js': "export * from './b.js';\nexport { alpha };",
+    'b.js': "export * from './a.js';\nexport { beta };",
+  })
+  const surface = collectSurface(source, 'p', { main: 'a.js' })
+  assert.ok(surface.names.has('alpha'))
+  assert.ok(surface.names.has('beta'))
+})
+
+await check('E6 CJS export shapes are recognised', () => {
+  const source = memSource({
+    'package.json': '{"main":"index.js"}',
+    'index.js': [
+      'exports.plain = 1;',
+      "Object.defineProperty(exports, 'defined', { value: 2 });",
+      'module.exports = { grouped, aliased: 3 };',
+    ].join('\n'),
+  })
+  const surface = collectSurface(source, 'p', { main: 'index.js' })
+  for (const name of ['plain', 'defined', 'grouped', 'aliased']) {
+    assert.ok(surface.names.has(name), `missing CJS export ${name}`)
+  }
+})
+
+await check('E7 an entry with no exports falls back to the union, marked incomplete', () => {
+  // Real case: @deepseek-ai/dsh-base ships `export {};`. Zero names is the
+  // truth there, and flagging incomplete stops that being read as "everything
+  // is missing".
+  const source = memSource({
+    'package.json': '{"main":"lib/index.js"}',
+    'lib/index.js': 'export {};',
+    'lib/other.js': 'export { hidden };',
+  })
+  const surface = collectSurface(source, 'p', { main: 'lib/index.js' })
+  assert.ok(surface.names.has('hidden'), 'the union should reach other files')
+  assert.equal(surface.complete, false, 'a union is a guess, never proof')
+})
+
+await check('E8 the file budget bounds the walk', () => {
+  const files = { 'package.json': '{"main":"index.js"}' }
+  for (let i = 0; i < 500; i += 1) files[`f${i}.js`] = `export { n${i} };`
+  const surface = collectSurface(memSource(files), 'p', { main: 'index.js' }, { maxFiles: 5 })
+  assert.equal(surface.complete, false, 'an exhausted budget must be reported')
+  assert.ok(surface.filesScanned <= 5, `read ${surface.filesScanned} files against a cap of 5`)
+})
+
+await check('E9 an empty surface never claims absence', () => {
+  // Guards I4 at this layer: `complete === false` means the surface may be
+  // missing names, so callers must not report a symbol as absent.
+  const surface = collectSurface(memSource({ 'package.json': '{}' }), 'p', {})
+  assert.equal(surface.names.size, 0)
+  assert.equal(surface.complete, false)
+})
+
+await check('E10 the running host agrees with the archive', () => {
+  // End-to-end against the installed app.asar. Skipped on CI, where no host
+  // exists. defineTool is known real; the fake name is known fake.
+  const surface = readHostSurface('@deepseek-ai/dsh-tools')
+  if (surface === undefined) return
+  assert.ok(surface.names.has('defineTool'), 'defineTool must resolve in the running host')
+  assert.ok(surface.names.has('default'), 'ToolRuntime as default is exported by the bundled index')
+  assert.equal(surface.names.has('totallyNotARealExport'), false, 'a fake name must not be reported present')
+})
 
 /* ------------------------------------------------------------------ report */
 
