@@ -23,6 +23,7 @@ import { Context, Service } from '@deepseek-ai/cordis'
 import { closeAsar, findNode, hasAsarPath, isAsarDir, listAsarDir, openAsar, readAsarFile, readAsarText } from '../lib/asar.js'
 import { readHostSurface } from '../lib/hostface.js'
 import { collectSurface } from '../lib/surface.js'
+import { versionsComparable } from '../lib/detect.js'
 import {
   collectStatic,
   defaultProfilePath,
@@ -579,18 +580,33 @@ await check('B4 scanning a bogus directory degrades to notes, not throws', () =>
  * So the correct behaviour is: without live confirmation, say nothing about
  * versions; and never lose the structural findings that need no version.
  */
-await check('B5 a stale on-disk host silences version claims but keeps structure', () => {
+await check('B5 version claims follow the running host, structure still works', () => {
+  // Before W1 this profile reported `unknown` and suppressed every
+  // version-sensitive finding — including the import check, which is what let a
+  // plugin silently call an API the running host does not export. The archive is
+  // now read, so those checks run against the host that actually executes.
   const snapshot = collectStatic(defaultProfilePath())
   assert.notEqual(snapshot.versionAuthority, 'authoritative', 'this profile must not be treated as authoritative')
   const findings = detect({ profile: snapshot, nodeVersion: process.version })
-  assert.ok(
-    !findings.some((finding) => finding.code === 'profile/peer-range-unsatisfied'),
-    `peer claims must be suppressed without authority; got ${JSON.stringify(findings.map((f) => f.code))}`,
-  )
-  assert.ok(
-    !findings.some((finding) => finding.code === 'profile/host-import-unsatisfied'),
-    'import claims must be suppressed without authority',
-  )
+  const comparable = snapshot.versionAuthority === 'archive-authoritative'
+
+  if (comparable) {
+    // Version-sensitive detectors are expected to have opinions now.
+    assert.ok(
+      findings.some((finding) => finding.code === 'profile/host-import-unsatisfied'),
+      'with the running host as baseline the import check must actually run',
+    )
+  } else {
+    assert.ok(
+      !findings.some((finding) => finding.code === 'profile/peer-range-unsatisfied'),
+      'peer claims must be suppressed without a trustworthy baseline',
+    )
+    assert.ok(
+      !findings.some((finding) => finding.code === 'profile/host-import-unsatisfied'),
+      'import claims must be suppressed without a trustworthy baseline',
+    )
+  }
+
   // Structural detectors need no version and must still work on real data.
   assert.ok(
     findings.some((finding) => finding.code === 'profile/module-under-multiple-ids'),
@@ -602,9 +618,12 @@ await check('B5 a stale on-disk host silences version claims but keeps structure
   )
   assert.ok(
     snapshot.notes.length > 0 || snapshot.versionAuthorityReason !== undefined,
-    'the coverage note must disclose why version claims were withheld',
+    'the coverage note must disclose which baseline was used',
   )
-  console.log(`[Part B] authority=${snapshot.versionAuthority}, version-sensitive findings suppressed`)
+  console.log(
+    `[Part B] authority=${snapshot.versionAuthority}, ` +
+      (comparable ? 'comparing against the running host archive' : 'version-sensitive findings suppressed'),
+  )
 })
 
 /**
@@ -1043,6 +1062,76 @@ await check('E10 the running host agrees with the archive', () => {
   assert.ok(surface.names.has('defineTool'), 'defineTool must resolve in the running host')
   assert.ok(surface.names.has('default'), 'ToolRuntime as default is exported by the bundled index')
   assert.equal(surface.names.has('totallyNotARealExport'), false, 'a fake name must not be reported present')
+})
+
+await check('E11 the documented false-positive symbols stay resolved', () => {
+  // README records this tool once reporting IconBranchOutlineRegular (7 sites)
+  // and resolveImageAttachmentAccess (13 sites) as missing from the host, when
+  // they were present — comparing against a stale disk copy. With the running
+  // host as baseline neither may ever be flagged again.
+  const surface = readHostSurface('@deepseek-ai/dsh-llm')
+  if (surface === undefined) return
+  const list = [...surface.names]
+  assert.ok(list.includes('resolveImageAttachmentAccess'), 'resolveImageAttachmentAccess must resolve in the running host')
+  assert.ok(!list.includes('assertNever'), 'a symbol the host genuinely does not export must stay absent')
+})
+
+await check('E12 an archive-authored profile reports no false import conflicts', () => {
+  const profilePath =
+    process.env.DSH_PROFILE_DIR ??
+    (process.env.DSH_HOME ? join(process.env.DSH_HOME, 'profiles', process.env.DSH_PROFILE ?? '') : undefined)
+  if (!profilePath) return
+  let snapshot
+  try {
+    snapshot = collectStatic(profilePath, [])
+  } catch {
+    return
+  }
+  if (snapshot.versionAuthority !== 'archive-authoritative') return
+  // Every unchecked import must be absent from the RUNNING host's own surface,
+  // otherwise the check proved nothing.
+  const fromHost = readHostSurface
+  let checked = 0
+  for (const facts of Object.values(snapshot.sourceFacts ?? {})) {
+    for (const symbol of facts.uncheckedImports) {
+      const surface = fromHost(symbol.module)
+      if (surface === undefined || !surface.complete) continue
+      checked += 1
+      assert.equal(
+        surface.names.has(symbol.symbol),
+        false,
+        `${symbol.module}#${symbol.symbol} was reported missing but is exported by the running host`,
+      )
+    }
+  }
+  assert.ok(checked > 0, 'expected at least one verifiable unchecked import to cross-check')
+})
+
+await check('E13 versionsComparable admits exactly the trustworthy verdicts', () => {
+  const at = (verdict) => ({ versionAuthority: verdict })
+  assert.equal(versionsComparable(at('authoritative')), true)
+  assert.equal(versionsComparable(at('archive-authoritative')), true, 'the running host archive is a real baseline')
+  assert.equal(versionsComparable(at('stale-disk')), false, 'a stale disk with no substitute must abstain')
+  assert.equal(versionsComparable(at('unknown')), false)
+})
+
+await check('E14 the fourth verdict resolves disk-versus-archive correctly', () => {
+  // Disk says one generation, the running archive says another: compare against
+  // the archive instead of abstaining, which is the entire point of W1.
+  const staleDisk = resolveVersionAuthority('0.1.0-rc.6', undefined, { '@deepseek-ai/dsh-base': '0.2.0-rc.2' })
+  assert.equal(staleDisk.verdict, 'archive-authoritative')
+  assert.ok(staleDisk.reason !== undefined && staleDisk.reason.length > 0)
+
+  const agreeing = resolveVersionAuthority(
+    '0.2.0-rc.2',
+    { '@deepseek-ai/dsh-base': '0.2.0-rc.2' },
+    { '@deepseek-ai/dsh-base': '0.2.0-rc.2' },
+  )
+  assert.equal(agreeing.verdict, 'authoritative')
+
+  // No live versions and no archive: still must abstain rather than guess.
+  const blind = resolveVersionAuthority('0.1.0-rc.6', undefined, undefined)
+  assert.equal(blind.verdict, 'unknown')
 })
 
 /* ------------------------------------------------------------------ report */

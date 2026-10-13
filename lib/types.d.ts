@@ -187,7 +187,19 @@ export interface PackageSourceFacts {
     readonly verified: number;
     readonly filesScanned: number;
 }
-/** The profile composition on disk, projected for analysis. */
+/**
+ * How trustworthy this snapshot's versions are as a description of the running
+ * host.
+ *
+ * - `authoritative`         disk and running host agree; compare freely.
+ * - `archive-authoritative` disk is stale BUT the running host's archive was
+ *                           read, so compare against the archive instead. (W1)
+ * - `stale-disk`            disk differs from a live host we could read versions
+ *                           from but nothing else; version comparisons abstain.
+ * - `unknown`               the running host could not be consulted at all.
+ */
+export type VersionAuthority = 'authoritative' | 'archive-authoritative' | 'stale-disk' | 'unknown';
+/** The static snapshot for the StaticSnapshot interface. */
 export interface StaticSnapshot {
     readonly profilePath: string;
     readonly layers: readonly PatchLayer[];
@@ -215,9 +227,21 @@ export interface StaticSnapshot {
      * `profiles/node_modules` holds an older generation; when that happens the
      * snapshot is NOT authoritative about versions, and version-sensitive
      * findings must be suppressed rather than reported against the wrong host.
+     *
+     * `archive-authoritative` is the fourth verdict, and the point of W1: the disk
+     * is demonstrably stale, but the RUNNING host's own archive was read
+     * successfully, so its versions and export surfaces are a trustworthy
+     * baseline. Detectors run against that baseline instead of abstaining.
      */
-    readonly versionAuthority: 'authoritative' | 'stale-disk' | 'unknown';
+    readonly versionAuthority: VersionAuthority;
     /** Explains a non-authoritative verdict, for the report's coverage note. */
     readonly versionAuthorityReason?: string;
+    /**
+     * Bundle name → version as the RUNNING host reports them, when an archive was
+     * read. Absent means the host could not be consulted.
+     */
+    readonly hostBundleVersions?: Readonly<Record<string, string>>;
+    /** Where those versions came from, for the coverage note. */
+    readonly hostOrigin?: string;
     readonly notes: readonly string[];
 }

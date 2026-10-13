@@ -7,10 +7,10 @@ import { fileURLToPath } from 'node:url'
 import { collectStatic, defaultProfilePath, detect, renderMarkdown } from '../lib/index.js'
 
 const profilePath = defaultProfilePath()
-// The versions the RUNNING packaged app reports for its bundles.
-const live = { '@deepseek-ai/dsh-base': '0.2.0-rc.2', '@deepseek-ai/dsh-web-app': '0.2.0-rc.2' }
-
-const snapshot = collectStatic(profilePath, [], live)
+// No artificial live versions: let the scanner consult the running host's own
+// archive, exactly as the plugin does at runtime. Hardcoding 0.2.0-rc.2 here
+// used to pin this report to `stale-disk` and hide every import finding.
+const snapshot = collectStatic(profilePath, [])
 const findings = detect({ profile: snapshot, nodeVersion: process.version })
 
 const report = {
@@ -28,9 +28,15 @@ const report = {
   },
   findings,
   notes: [
-    `运行中的宿主是 @deepseek-ai/dsh-base@${live['@deepseek-ai/dsh-base']}（打包应用自带），` +
-      `而 profiles/node_modules 里的副本是 ${snapshot.hostVersion}——两者不是同一代。`,
-    '因此 peer 范围与导入符号这两类「需要与运行宿主逐条比对」的检查被跳过：用旧副本比对会产出并不存在的冲突（这一点已被实测证伪过一次）。',
+    // Coverage notes come from the scan itself: which baseline was trusted, and
+    // what could not be read. Nothing here hardcodes a host version.
+    ...(snapshot.versionAuthorityReason === undefined ? [] : [snapshot.versionAuthorityReason]),
+    ...(snapshot.hostOrigin === undefined
+      ? []
+      : [
+          `版本敏感的结论（peer 范围、导入符号）以运行宿主的 ${snapshot.hostBundleVersions?.['@deepseek-ai/dsh-base'] ?? '未知版本'} 为准（` +
+            `来源：${snapshot.hostOrigin}），而不是磁盘上的 ${snapshot.hostVersion ?? '未解析到版本'}。`,
+        ]),
     ...snapshot.notes,
   ],
 }

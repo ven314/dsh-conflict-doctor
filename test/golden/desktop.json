@@ -1,10 +1,12 @@
 {
-  "authority": "unknown",
+  "authority": "archive-authoritative",
   "layers": 13,
   "patchLayers": 13,
   "findings": [
     "info profile/bundle-unresolved",
     "info profile/module-under-multiple-ids",
-    "info profile/row-config-replaced x3"
+    "info profile/row-config-replaced x3",
+    "warning profile/host-import-unsatisfied x32",
+    "warning profile/peer-range-unsatisfied x5"
   ]
 }

@@ -11,7 +11,9 @@ import { existsSync, readFileSync, statSync } from 'node:fs'
 import { join, resolve } from 'node:path'
 import { satisfies, valid, validRange } from 'semver'
 import { parse as parseYaml } from 'yaml'
+import { collectHostFacts, readHostSurface } from './hostface.js'
 import { collectExportSurface, scanPackageSources, type PackageSources } from './source.js'
+import type { ExportSurface } from './surface.js'
 import type {
   ImportedSymbol,
   PackageSourceFacts,
@@ -20,6 +22,7 @@ import type {
   PatchOverride,
   ResolvedPackage,
   StaticSnapshot,
+  VersionAuthority,
 } from './types.js'
 
 /** Caps that keep a pathological package tree from turning an audit into a hang. */
@@ -148,12 +151,17 @@ export function scanDeclaredToolIds(dir: string): string[] {
  * @param profilePath - the profile directory (the one holding `package.json`
  *   with `dsh.profile.bundles` and `cordis.patch.yml`).
  * @param extraRoots - additional `node_modules` roots to search for packages.
+ * @param liveBundleVersions - versions reported by the live plugin-manager,
+ *   which take precedence over anything read from disk.
+ * @param allowArchive - read the running host's OWN archive when no live
+ *   versions were supplied. Set false for hermetic tests; default true.
  * @returns the static snapshot; missing files are reported as notes, never thrown.
  */
 export function collectStatic(
   profilePath: string,
   extraRoots: readonly string[] = [],
   liveBundleVersions?: Readonly<Record<string, string>>,
+  allowArchive = true,
 ): StaticSnapshot {
   const notes: string[] = []
   const layers: PatchLayer[] = []
@@ -312,6 +320,26 @@ export function collectStatic(
   // Verify every declared import against the installed package's real export
   // surface. This is the difference between "the version string matches" and
   // "the symbol the plugin imports actually exists here".
+  //
+  // Surfaces from the running host are cached per module: each uncached read
+  // opens the 121 MB archive, and a profile importing the same host package
+  // from dozens of plugins would otherwise pay that cost every time.
+  const hostSurfaceCache = new Map<string, ExportSurface | undefined>()
+  const readHostSurfaceCached = (name: string): ExportSurface | undefined => {
+    if (hostSurfaceCache.has(name)) return hostSurfaceCache.get(name)
+    let surface: ExportSurface | undefined
+    try {
+      surface = readHostSurface(name)
+    } catch {
+      surface = undefined
+    }
+    hostSurfaceCache.set(name, surface)
+    return surface
+  }
+  // Consult the running host when the disk is not authoritative, or when there
+  // is nothing to compare against at all.
+  const preferHostSurface = allowArchive !== false
+
   for (const [moduleName, imports] of Object.entries(declaredImports)) {
     const unchecked: ImportedSymbol[] = []
     const unverifiable: ImportedSymbol[] = []
@@ -326,11 +354,24 @@ export function collectStatic(
         continue
       }
       resolvedDirs.set(module, depDir)
-      const surface = collectExportSurface(depDir)
+
+      // Prefer the RUNNING host's export surface over the disk copy. A packaged
+      // app serves bundles from its own archive, so the copy in this profile
+      // tree can be a whole generation behind: resolving imports against it is
+      // exactly how this tool once reported seven missing symbols that were
+      // present in the host actually running.
+      const hostSurface = preferHostSurface ? (hostSurfaceCache.get(module) ?? readHostSurfaceCached(module)) : undefined
+      if (hostSurface !== undefined) hostSurfaceCache.set(module, hostSurface)
+      const fromDisk = collectExportSurface(depDir)
+      const surface = hostSurface ?? fromDisk
+      const origin = hostSurface !== undefined ? 'running host' : 'profile node_modules'
+
       for (const symbol of symbols) {
         if (surface.names.has(symbol)) verified += 1
-        else if (surface.complete) unchecked.push({ module, symbol, file: `${moduleName} → ${module}` })
-        else unverifiable.push({ module, symbol, file: `${moduleName} → ${module}` })
+        // Only ever called absent from a COMPLETE surface. An incomplete one may
+        // be missing names through truncation, so it can never prove absence.
+        else if (surface.complete) unchecked.push({ module, symbol, file: `${moduleName} → ${module} (${origin})` })
+        else unverifiable.push({ module, symbol, file: `${moduleName} → ${module} (${origin})` })
       }
     }
     sourceFacts[moduleName] = {
@@ -363,9 +404,31 @@ export function collectStatic(
   // Decide whether these on-disk versions describe the RUNNING host. A packaged
   // desktop app serves its bundles from its own archive while this directory
   // may hold an older generation; reporting peer/import conflicts against the
-  // stale copy invents failures that do not exist. The caller passes the live
-  // bundle versions when it has them.
-  const authority = resolveVersionAuthority(hostVersion, liveBundleVersions)
+  // stale copy invents failures that do not exist.
+  //
+  // When no live plugin-manager versions were supplied, consult the running
+  // host's archive directly. That is what turns "abstain" into "compare against
+  // what actually runs" — the point of W1. It is skipped when `allowArchive` is
+  // false so unit tests stay hermetic and predictable.
+  let archiveVersions: Record<string, string> | undefined
+  let archiveOrigin: string | undefined
+  if (liveBundleVersions === undefined && allowArchive !== false) {
+    try {
+      const facts = collectHostFacts()
+      if (facts !== undefined) {
+        archiveVersions = Object.fromEntries(facts.bundles)
+        archiveOrigin = facts.origin
+        notes.push(...facts.notes)
+      }
+    } catch (error) {
+      notes.push(
+        `the running host's archive could not be read, so version-sensitive findings abstain: ` +
+          `${error instanceof Error ? error.message : String(error)}`,
+      )
+    }
+  }
+
+  const authority = resolveVersionAuthority(hostVersion, liveBundleVersions, archiveVersions)
 
   return {
     profilePath,
@@ -382,6 +445,8 @@ export function collectStatic(
     ...(hostVersion === undefined ? {} : { hostVersion }),
     versionAuthority: authority.verdict,
     ...(authority.reason === undefined ? {} : { versionAuthorityReason: authority.reason }),
+    ...(archiveVersions === undefined ? {} : { hostBundleVersions: archiveVersions }),
+    ...(archiveOrigin === undefined ? {} : { hostOrigin: archiveOrigin }),
     notes,
   }
 }
@@ -392,30 +457,64 @@ export function collectStatic(
  * Exported so the verdict can be unit-tested directly, and so callers can
  * explain it without re-deriving the rule.
  *
+ * Four verdicts, and the fourth is why W1 exists. Historically there were three
+ * and `stale-disk` meant "abstain": on a packaged desktop install the disk holds
+ * one generation while the app runs another, so every version comparison was
+ * suppressed — including the import check that catches a plugin calling an API
+ * the host does not export. `archive-authoritative` replaces that abstention by
+ * reading the running host's own archive and comparing against IT.
+ *
  * @param diskHostVersion - `@deepseek-ai/dsh-base` version found on disk.
  * @param liveBundleVersions - versions reported by the live plugin-manager.
+ * @param archiveVersions - versions read from the running host's archive.
  * @returns the verdict plus its explanation.
  */
 export function resolveVersionAuthority(
   diskHostVersion: string | undefined,
-  liveBundleVersions: Readonly<Record<string, string>> | undefined,
-): { verdict: 'authoritative' | 'stale-disk' | 'unknown'; reason?: string } {
-  if (liveBundleVersions === undefined) {
+  liveBundleVersions?: Readonly<Record<string, string>>,
+  archiveVersions?: Readonly<Record<string, string>>,
+): { verdict: VersionAuthority; reason?: string } {
+  const liveHost = liveBundleVersions?.['@deepseek-ai/dsh-base']
+  const archiveHost = archiveVersions?.['@deepseek-ai/dsh-base']
+
+  // A live plugin-manager reading equal to disk is the strongest evidence.
+  if (liveHost !== undefined && diskHostVersion !== undefined && liveHost === diskHostVersion) {
+    return { verdict: 'authoritative' }
+  }
+
+  // The disk disagrees with the running host, but the running host's own archive
+  // was read: version-sensitive detectors may run against THAT baseline.
+  if (archiveHost !== undefined && diskHostVersion !== undefined && archiveHost !== diskHostVersion) {
     return {
-      verdict: 'unknown',
-      reason: 'live bundle versions were unavailable, so on-disk versions could not be confirmed against the running host',
+      verdict: 'archive-authoritative',
+      reason:
+        `${profileVersionSource()} 里的 @deepseek-ai/dsh-base 是 ${diskHostVersion}，而运行中的宿主是 ${archiveHost}（打包应用自带 ` +
+        `archive，已直接读取）：磁盘副本不是同一代，因此版本敏感的结论以运行宿主为准，而不是像过去那样整体跳过。`,
     }
   }
-  const liveHost = liveBundleVersions['@deepseek-ai/dsh-base']
-  if (liveHost === undefined || diskHostVersion === undefined) {
-    return { verdict: 'unknown', reason: 'the host version could not be read from both the disk and the live host' }
+  if (archiveHost !== undefined && diskHostVersion === undefined) {
+    return {
+      verdict: 'archive-authoritative',
+      reason:
+        `磁盘上没有解析到 @deepseek-ai/dsh-base，但读到了运行宿主自带的 ${archiveHost}：` + `版本敏感的结论以运行宿主为准。`,
+    }
   }
-  if (liveHost === diskHostVersion) return { verdict: 'authoritative' }
+
+  if (liveHost !== undefined && diskHostVersion !== undefined && liveHost !== diskHostVersion) {
+    return {
+      verdict: 'stale-disk',
+      reason:
+        `运行中的宿主是 ${liveHost}（打包应用自带），而 ${profileVersionSource()} 里的 @deepseek-ai/dsh-base 是 ${diskHostVersion}：` +
+        `两者不是同一代。版本敏感的结论（peer 范围、导入符号）已按「不可判定」跳过，避免用旧副本比对出并不存在的冲突。`,
+    }
+  }
+
   return {
-    verdict: 'stale-disk',
+    verdict: 'unknown',
     reason:
-      `运行中的宿主是本目录之外的 ${liveHost}（打包应用自带），而 ${profileVersionSource()} 里的 @deepseek-ai/dsh-base 是 ${diskHostVersion}：` +
-      `两者不是同一代。版本敏感的结论（peer 范围、导入符号）已按「不可判定」跳过，避免用旧副本比对出并不存在的冲突。`,
+      liveBundleVersions === undefined
+        ? 'live bundle versions were unavailable, so on-disk versions could not be confirmed against the running host'
+        : 'the host version could not be read from both the disk and the live host',
   }
 }
 
