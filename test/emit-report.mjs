@@ -39,5 +39,7 @@ const report = {
 const out = fileURLToPath(new URL('../../conflict-doctor-report.md', import.meta.url))
 writeFileSync(out, renderMarkdown(report) + '\n', 'utf8')
 console.log(`wrote ${out}`)
-console.log(`authority=${snapshot.versionAuthority} findings=${findings.length} layers=${snapshot.layers.length} packages=${snapshot.packages.length}`)
+console.log(
+  `authority=${snapshot.versionAuthority} findings=${findings.length} layers=${snapshot.layers.length} packages=${snapshot.packages.length}`,
+)
 console.log('codes:', [...new Set(findings.map((f) => `${f.severity}:${f.code}`))].join('\n  '))

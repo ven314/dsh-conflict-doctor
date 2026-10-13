@@ -6,15 +6,7 @@
  * I change", not merely to print a red line.
  * @module dsh-conflict-doctor/detect
  */
-import type {
-  Finding,
-  Fix,
-  LiveSnapshot,
-  PatchInsert,
-  PatchOverride,
-  Severity,
-  StaticSnapshot,
-} from './types.js'
+import type { Finding, Fix, LiveSnapshot, PatchInsert, PatchOverride, Severity, StaticSnapshot } from './types.js'
 import { lt, minVersion } from 'semver'
 import { satisfiesRange } from './static.js'
 
@@ -55,8 +47,7 @@ function detectPendingMissingService(live: LiveSnapshot): Finding[] {
       severity: 'critical',
       title: `“${entry.entryId}” 永远停在 PENDING：它等的服务没有任何插件提供`,
       refs: [entry.entryId, entry.moduleName, ...entry.missingInject],
-      impact:
-        '插件不会报错、不会加载、也不会留下日志——只是安静地什么都不做。用户看到的现象是「装了这个插件但功能不出现」。',
+      impact: '插件不会报错、不会加载、也不会留下日志——只是安静地什么都不做。用户看到的现象是「装了这个插件但功能不出现」。',
       evidence: [
         `entry「${entry.entryId}」(${entry.moduleName}) 的 fiber 状态是 pending`,
         `inject 声明的服务：[${entry.inject.join(', ') || '(none)'}]`,
@@ -108,10 +99,7 @@ function detectFailedFiber(live: LiveSnapshot): Finding[] {
     findings.push({
       code: collided === undefined ? 'live/failed-fiber' : 'live/tool-id-conflict',
       severity: 'critical',
-      title:
-        collided === undefined
-          ? `“${entry.entryId}” 启动失败`
-          : `tool id 冲突：“${collided}” 被两个插件重复注册`,
+      title: collided === undefined ? `“${entry.entryId}” 启动失败` : `tool id 冲突：“${collided}” 被两个插件重复注册`,
       refs: [entry.entryId, entry.moduleName, ...(collided === undefined ? [] : [collided])],
       impact:
         collided === undefined
@@ -368,7 +356,9 @@ function detectRowConfigReplaced(snapshot: StaticSnapshot): Finding[] {
   for (const [rowId, entries] of perRow) {
     const distinct = new Set(entries.map((entry) => entry.configJson))
     if (entries.length < 2 || distinct.size < 2) continue
-    const labels = entries.map((entry) => `${snapshot.layers[entry.layerIndex]?.label ?? `layer ${entry.layerIndex}`} → ${entry.configJson}`)
+    const labels = entries.map(
+      (entry) => `${snapshot.layers[entry.layerIndex]?.label ?? `layer ${entry.layerIndex}`} → ${entry.configJson}`,
+    )
     const last = entries[entries.length - 1]
     findings.push({
       code: 'profile/row-config-replaced',
@@ -682,9 +672,7 @@ function detectSelfDependentPending(live: LiveSnapshot): Finding[] {
   const findings: Finding[] = []
   for (const entry of live.entries) {
     if (entry.fiberPhase !== 'pending' || entry.missingInject.length === 0) continue
-    const selfProvided = declared
-      .filter((provided) => provided.entryId === entry.entryId)
-      .map((provided) => provided.service)
+    const selfProvided = declared.filter((provided) => provided.entryId === entry.entryId).map((provided) => provided.service)
     const trapped = entry.missingInject.filter((service) => selfProvided.includes(service))
     if (trapped.length === 0) continue
     findings.push({
@@ -692,8 +680,7 @@ function detectSelfDependentPending(live: LiveSnapshot): Finding[] {
       severity: 'critical',
       title: `“${entry.entryId}” 在等自己提供的服务：${trapped.join(', ')}`,
       refs: [entry.entryId, entry.moduleName, ...trapped],
-      impact:
-        '这是自锁：fiber 只有被激活之后才可能注册那个服务，而它偏偏在激活前等那个服务。它永远不会激活，也不会报错。',
+      impact: '这是自锁：fiber 只有被激活之后才可能注册那个服务，而它偏偏在激活前等那个服务。它永远不会激活，也不会报错。',
       evidence: [
         `entry「${entry.entryId}」声明提供：[${selfProvided.join(', ')}]`,
         `同一条 entry 的 inject 里则声明等待：[${trapped.join(', ')}]`,
@@ -703,8 +690,7 @@ function detectSelfDependentPending(live: LiveSnapshot): Finding[] {
         {
           kind: 'manual',
           label: '把服务注册移出依赖它的那次 apply',
-          detail:
-            '拆分插件：先无条件 provide，再在拿到服务后的回调里做依赖它的工作；或把 inject 改成运行期 ctx.get() 读取。',
+          detail: '拆分插件：先无条件 provide，再在拿到服务后的回调里做依赖它的工作；或把 inject 改成运行期 ctx.get() 读取。',
         },
         {
           kind: 'patch',

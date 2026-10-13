@@ -1,0 +1,10 @@
+{
+  "authority": "unknown",
+  "layers": 13,
+  "patchLayers": 13,
+  "findings": [
+    "info profile/bundle-unresolved",
+    "info profile/module-under-multiple-ids",
+    "info profile/row-config-replaced x3"
+  ]
+}

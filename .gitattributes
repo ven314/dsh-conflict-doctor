@@ -1,0 +1,17 @@
+# Every source file in this repo is LF on disk (see .editorconfig and
+# .prettierrc.json). Without this file git normalises text files to the
+# platform's native EOL on checkout, which turns a Windows clone into a tree
+# where every file differs from CI's — exactly the churn this gate exists to
+# prevent.
+* text=auto eol=lf
+
+# Binary and generated artifacts must never be normalised.
+*.png binary
+*.jpg binary
+*.ico binary
+*.tgz binary
+pnpm-lock.yaml -text linguist-generated=true
+
+# lib/ is committed so a git-URL install works without a build step. It is
+# still machine output, so hide it from diffs and language stats.
+lib/** linguist-generated=true

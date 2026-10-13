@@ -57,11 +57,7 @@ const layer = (index, label, kind) => ({ index, label, kind, file: `${label}.yml
 /** A profile whose every layer is hostile, so each detector has a target. */
 const dirtyProfile = {
   profilePath: 'C:/fixture/profile',
-  layers: [
-    layer(0, 'bundle base@1.0.0', 'bundle'),
-    layer(1, 'bundle mode@1.0.0', 'bundle'),
-    layer(2, 'user patch', 'user'),
-  ],
+  layers: [layer(0, 'bundle base@1.0.0', 'bundle'), layer(1, 'bundle mode@1.0.0', 'bundle'), layer(2, 'user patch', 'user')],
   inserts: [
     // same row id twice inside layer 0 —whole-tree collision
     { rowId: 'dup-row', moduleName: 'pkg-one', hasConfig: false, configJson: 'null', layerIndex: 0 },
@@ -145,7 +141,10 @@ await check('A4 config replaced by a later layer', () => {
   // Layer restatement is the documented DSH contract, so it is advisory only.
   assert.equal(finding.severity, 'info')
   assert.equal(finding.refs[0], 'cfg-row')
-  assert.ok(finding.fixes.some((fix) => fix.snippet !== undefined), 'repair should carry a patch snippet')
+  assert.ok(
+    finding.fixes.some((fix) => fix.snippet !== undefined),
+    'repair should carry a patch snippet',
+  )
 })
 
 await check('A5 dangling override', () => {
@@ -247,15 +246,36 @@ await check('A18 a fiber waiting on its own service is not "missing a provider"'
   const finding = findingFor(found, 'live/pending-self-dependent')
   assert.equal(finding.severity, 'critical')
   assert.ok(finding.refs.includes('boxService'))
-  assert.ok(finding.fixes.some((fix) => /ctx\.get|拆分|provide/.test(fix.detail)), 'must not suggest installing a provider')
+  assert.ok(
+    finding.fixes.some((fix) => /ctx\.get|拆分|provide/.test(fix.detail)),
+    'must not suggest installing a provider',
+  )
 })
 
 /** Outbound collision: imminent only when both owners are loaded and it is absent. */
 await check('A19 outbound tool collision needs both owners loaded and the tool absent', () => {
   const live = {
     entries: [
-      { entryId: 'a', moduleName: 'pkg-one', enabled: true, group: false, fiberPhase: 'active', inject: [], missingInject: [], provides: [] },
-      { entryId: 'b', moduleName: 'pkg-two', enabled: true, group: false, fiberPhase: 'active', inject: [], missingInject: [], provides: [] },
+      {
+        entryId: 'a',
+        moduleName: 'pkg-one',
+        enabled: true,
+        group: false,
+        fiberPhase: 'active',
+        inject: [],
+        missingInject: [],
+        provides: [],
+      },
+      {
+        entryId: 'b',
+        moduleName: 'pkg-two',
+        enabled: true,
+        group: false,
+        fiberPhase: 'active',
+        inject: [],
+        missingInject: [],
+        provides: [],
+      },
     ],
     services: [],
     declaredProvides: [],
@@ -275,7 +295,11 @@ await check('A19 outbound tool collision needs both owners loaded and the tool a
   }
   const found = detect({ live, profile, nodeVersion: '20.11.0' })
   const imminent = found.filter((f) => f.code === 'live/outbound-tool-collision')
-  assert.equal(imminent.length, 1, `expected exactly the unregistered collision, got ${JSON.stringify(imminent.map((f) => f.refs[0]))}`)
+  assert.equal(
+    imminent.length,
+    1,
+    `expected exactly the unregistered collision, got ${JSON.stringify(imminent.map((f) => f.refs[0]))}`,
+  )
   assert.equal(imminent[0].refs[0], 'absent_tool')
   // If only one owner is loaded, the collision is not imminent.
   const halfLoaded = detect({ live: { ...live, entries: [live.entries[0]] }, profile, nodeVersion: '20.11.0' })
@@ -283,7 +307,8 @@ await check('A19 outbound tool collision needs both owners loaded and the tool a
 })
 
 /** Import verification: absent symbol reported, present symbol silent. */
-await check('A20 a host symbol the plugin imports but the host does not export', () => {  const profile = {
+await check('A20 a host symbol the plugin imports but the host does not export', () => {
+  const profile = {
     ...dirtyProfile,
     declaredTools: {},
     declaredServices: {},
@@ -324,7 +349,10 @@ await check('A20 a host symbol the plugin imports but the host does not export',
 await check('A21 version-sensitive findings are suppressed without authority', async () => {
   const stale = { ...dirtyProfile, versionAuthority: 'stale-disk' }
   const unknown = { ...dirtyProfile, versionAuthority: 'unknown' }
-  for (const [label, snapshot] of [['stale-disk', stale], ['unknown', unknown]]) {
+  for (const [label, snapshot] of [
+    ['stale-disk', stale],
+    ['unknown', unknown],
+  ]) {
     const found = detect({ profile: snapshot, nodeVersion: '20.11.0' })
     assert.ok(
       !found.some((f) => f.code === 'profile/peer-range-unsatisfied'),
@@ -335,8 +363,14 @@ await check('A21 version-sensitive findings are suppressed without authority', a
       `${label}: an import finding was reported against an unverified baseline`,
     )
     // Findings that do NOT depend on version comparison must survive the gate.
-    assert.ok(found.some((f) => f.code === 'profile/duplicate-row-in-layer'), `${label}: structural findings must survive`)
-    assert.ok(found.some((f) => f.code === 'profile/tool-id-collision'), `${label}: tool collisions must survive`)
+    assert.ok(
+      found.some((f) => f.code === 'profile/duplicate-row-in-layer'),
+      `${label}: structural findings must survive`,
+    )
+    assert.ok(
+      found.some((f) => f.code === 'profile/tool-id-collision'),
+      `${label}: tool collisions must survive`,
+    )
   }
 })
 
@@ -350,7 +384,8 @@ await check('A22 the authority verdict is derived from the live host version', (
   assert.ok(stale.reason && stale.reason.includes('0.2.0-rc.2'), 'the reason must name the live host version')
 })
 
-await check('A10 findings are severity-sorted and every one is actionable', () => {  const ranks = staticFindings.map((finding) => ({ critical: 0, warning: 1, info: 2 })[finding.severity])
+await check('A10 findings are severity-sorted and every one is actionable', () => {
+  const ranks = staticFindings.map((finding) => ({ critical: 0, warning: 1, info: 2 })[finding.severity])
   for (let index = 1; index < ranks.length; index += 1) assert.ok(ranks[index] >= ranks[index - 1], 'severity order')
   for (const finding of staticFindings) {
     assert.ok(finding.evidence.length > 0, `${finding.code} carries no evidence`)
@@ -400,7 +435,8 @@ const dirtyLive = {
       inject: [],
       missingInject: [],
       provides: [],
-      errorText: 'tool "web_search" is already registered (for a per-agent variant, register through that agent\'s `agent.ctx` instead)',
+      errorText:
+        'tool "web_search" is already registered (for a per-agent variant, register through that agent\'s `agent.ctx` instead)',
     },
     // A settled-but-not-active fiber whose inject nothing in the process provides.
     {
@@ -505,7 +541,8 @@ await check('B2 the real running profile scans cleanly', () => {
   )
 })
 
-await check('B3 declared-tool extraction works on a real package', () => {  const profilePath = defaultProfilePath()
+await check('B3 declared-tool extraction works on a real package', () => {
+  const profilePath = defaultProfilePath()
   const snapshot = collectStatic(profilePath)
   const withTools = Object.entries(snapshot.declaredTools).filter(([, owners]) => owners.length > 0)
   assert.ok(withTools.length > 10, `expected many declared tool ids, got ${withTools.length}`)
@@ -545,8 +582,14 @@ await check('B5 a stale on-disk host silences version claims but keeps structure
     'import claims must be suppressed without authority',
   )
   // Structural detectors need no version and must still work on real data.
-  assert.ok(findings.some((finding) => finding.code === 'profile/module-under-multiple-ids'), 'real double mount')
-  assert.ok(findings.some((finding) => finding.code === 'profile/row-config-replaced'), 'real layer restatement')
+  assert.ok(
+    findings.some((finding) => finding.code === 'profile/module-under-multiple-ids'),
+    'real double mount',
+  )
+  assert.ok(
+    findings.some((finding) => finding.code === 'profile/row-config-replaced'),
+    'real layer restatement',
+  )
   assert.ok(
     snapshot.notes.length > 0 || snapshot.versionAuthorityReason !== undefined,
     'the coverage note must disclose why version claims were withheld',
@@ -657,7 +700,10 @@ async function partC() {
   check('C5 fibers with no Loader service degrade to a note', async () => {
     const report = await runAudit(ctx, { scope: 'live' })
     assert.equal(report.summary.liveEntries, 0)
-    assert.ok(report.notes.some((note) => note.includes('loader')), `notes were ${JSON.stringify(report.notes)}`)
+    assert.ok(
+      report.notes.some((note) => note.includes('loader')),
+      `notes were ${JSON.stringify(report.notes)}`,
+    )
   })
 
   check('C6 unloading the plugin retracts its registrations', async () => {

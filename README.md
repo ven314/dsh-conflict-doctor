@@ -4,11 +4,11 @@
 
 DSH 有大量手段告诉你插件*装上了*；没有任何手段告诉你插件*没在工作*。三类真实故障全部是静默的：
 
-| 现象 | 实际发生的事 | 现有工具为什么看不见 |
-|---|---|---|
-| 装完插件，功能不出现 | fiber 停在 `PENDING`，等一个没人提供的服务，不报错、不打日志 | 没有报错就没有信号 |
-| 装第二个插件后整个功能没了 | tool id 重复 → 后注册者抛错 → **整行**加载失败，错误信息不指出另一个 owner | 错误只说「already registered」 |
-| 「我明明关了它，怎么还生效」 | 后一层 patch 把前一层的 `disabled`/`config` 盖掉了 | 层语义是整段替换、最后一层胜出 |
+| 现象                         | 实际发生的事                                                               | 现有工具为什么看不见           |
+| ---------------------------- | -------------------------------------------------------------------------- | ------------------------------ |
+| 装完插件，功能不出现         | fiber 停在 `PENDING`，等一个没人提供的服务，不报错、不打日志               | 没有报错就没有信号             |
+| 装第二个插件后整个功能没了   | tool id 重复 → 后注册者抛错 → **整行**加载失败，错误信息不指出另一个 owner | 错误只说「already registered」 |
+| 「我明明关了它，怎么还生效」 | 后一层 patch 把前一层的 `disabled`/`config` 盖掉了                         | 层语义是整段替换、最后一层胜出 |
 
 本插件把运行期图谱与磁盘上的 patch 层对齐，给出**谁和谁撞了 + 改哪一行**。
 
@@ -16,37 +16,37 @@ DSH 有大量手段告诉你插件*装上了*；没有任何手段告诉你插�
 
 **运行期（live）**
 
-| code | 严重度 | 含义 |
-|---|---|---|
-| `live/tool-id-conflict` | critical | 两个插件注册同一个 tool id；从失败 fiber 的错误里认出冲突名，并确认它已在注册表中 |
-| `live/failed-fiber` | critical | 任何启动失败的 fiber，带原始错误首行 |
-| `live/pending-missing-service` | critical | fiber 停在 PENDING 且 `inject` 的服务无人提供——静默失败的根源 |
-| `live/duplicate-entry-id` | critical | 两个模块占用同一个 Loader entry id（整树启动失败） |
-| `live/unprovided-inject` | warning | 声明依赖的服务在整个进程里都不存在（下次重载就会挂） |
+| code                           | 严重度   | 含义                                                                              |
+| ------------------------------ | -------- | --------------------------------------------------------------------------------- |
+| `live/tool-id-conflict`        | critical | 两个插件注册同一个 tool id；从失败 fiber 的错误里认出冲突名，并确认它已在注册表中 |
+| `live/failed-fiber`            | critical | 任何启动失败的 fiber，带原始错误首行                                              |
+| `live/pending-missing-service` | critical | fiber 停在 PENDING 且 `inject` 的服务无人提供——静默失败的根源                     |
+| `live/duplicate-entry-id`      | critical | 两个模块占用同一个 Loader entry id（整树启动失败）                                |
+| `live/unprovided-inject`       | warning  | 声明依赖的服务在整个进程里都不存在（下次重载就会挂）                              |
 
 **磁盘组合（profile）**
 
-| code | 严重度 | 含义 |
-|---|---|---|
-| `profile/duplicate-row-in-layer` | critical | 同一 patch 层里 row id 重复 |
+| code                                | 严重度          | 含义                                                                                                                                                           |
+| ----------------------------------- | --------------- | -------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `profile/duplicate-row-in-layer`    | critical        | 同一 patch 层里 row id 重复                                                                                                                                    |
 | `profile/module-under-multiple-ids` | critical / info | 同一模块挂两次。**config 不同 → info**（`dsh-tool-subagent` 用 `toolName: subagent` / `subagent_fork` 刻意挂两次）；config 相同或为空 → critical（真的挂重了） |
-| `profile/disable-then-reinsert` | critical | 某层停用、后面的层又插进来 |
-| `profile/missing-patch-file` | critical | bundle 声明的 `dsh.bundle.patch` 在磁盘上不存在 |
-| `profile/tool-id-collision` | critical | 两个包在编译产物里声明了同一个 tool id。**这是静态版本比对永远覆盖不到的能力级冲突** |
-| `profile/peer-range-unsatisfied` | warning / info | 按包分组。已装版本**低于**声明最小值 → warning（宿主比插件旧，真会坏）；只是声明更旧 → info。**仅在版本权威性已确认时运行**（见下） |
-| `profile/host-import-unsatisfied` | warning | 插件从宿主包里 import 了一个**当前宿主并不导出**的符号。这是「peer 版本字符串匹配 ≠ API 存在」的具体形态。**仅在版本权威性已确认时运行** |
-| `profile/service-collision` | warning | 两个包注册同名服务。**按 realm 过滤**：浏览器侧包（`dsh.client`）不与宿主共享服务表，不参与比对 |
-| `profile/row-config-replaced` | info | 多层依次替换同一 row 的 config（DSH 的层语义，符合预期时无需处理，所以只作提示） |
-| `profile/dangling-override` | warning | patch 里的 `- id: X` 不对应任何已插入的 row（空操作，不报错） |
-| `profile/node-engine-unsatisfied` | warning | `engines.node` 不满足当前 Node。**仅在版本权威性已确认时运行** |
-| `profile/bundle-unresolved` | info | `dsh.profile.bundles` 里的名字在 node_modules 里解析不到 |
+| `profile/disable-then-reinsert`     | critical        | 某层停用、后面的层又插进来                                                                                                                                     |
+| `profile/missing-patch-file`        | critical        | bundle 声明的 `dsh.bundle.patch` 在磁盘上不存在                                                                                                                |
+| `profile/tool-id-collision`         | critical        | 两个包在编译产物里声明了同一个 tool id。**这是静态版本比对永远覆盖不到的能力级冲突**                                                                           |
+| `profile/peer-range-unsatisfied`    | warning / info  | 按包分组。已装版本**低于**声明最小值 → warning（宿主比插件旧，真会坏）；只是声明更旧 → info。**仅在版本权威性已确认时运行**（见下）                            |
+| `profile/host-import-unsatisfied`   | warning         | 插件从宿主包里 import 了一个**当前宿主并不导出**的符号。这是「peer 版本字符串匹配 ≠ API 存在」的具体形态。**仅在版本权威性已确认时运行**                       |
+| `profile/service-collision`         | warning         | 两个包注册同名服务。**按 realm 过滤**：浏览器侧包（`dsh.client`）不与宿主共享服务表，不参与比对                                                                |
+| `profile/row-config-replaced`       | info            | 多层依次替换同一 row 的 config（DSH 的层语义，符合预期时无需处理，所以只作提示）                                                                               |
+| `profile/dangling-override`         | warning         | patch 里的 `- id: X` 不对应任何已插入的 row（空操作，不报错）                                                                                                  |
+| `profile/node-engine-unsatisfied`   | warning         | `engines.node` 不满足当前 Node。**仅在版本权威性已确认时运行**                                                                                                 |
+| `profile/bundle-unresolved`         | info            | `dsh.profile.bundles` 里的名字在 node_modules 里解析不到                                                                                                       |
 
 运行期还有两条需要跨两半才能看出的：
 
-| code | 严重度 | 含义 |
-|---|---|---|
-| `live/pending-self-dependent` | critical | fiber 等的服务正是**它自己**要提供的——自锁，永远不会激活。修复不是「装 provider」 |
-| `live/outbound-tool-collision` | warning | 两个**已加载**的插件都声明了同一 tool id，而该 id 还没进注册表：冲突是确定的，只是被时序掩盖 |
+| code                           | 严重度   | 含义                                                                                         |
+| ------------------------------ | -------- | -------------------------------------------------------------------------------------------- |
+| `live/pending-self-dependent`  | critical | fiber 等的服务正是**它自己**要提供的——自锁，永远不会激活。修复不是「装 provider」            |
+| `live/outbound-tool-collision` | warning  | 两个**已加载**的插件都声明了同一 tool id，而该 id 还没进注册表：冲突是确定的，只是被时序掩盖 |
 
 ### 版本权威性：一次真实的误报与修正
 

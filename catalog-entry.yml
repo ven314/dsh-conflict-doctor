@@ -2,5 +2,5 @@ url: https://github.com/ven314/dsh-conflict-doctor
 name: ven314/dsh-conflict-doctor
 category: dev
 description:
-  en: "Conflict diagnosis and repair for DeepSeek Harness plugins. Builds a capability graph of the running Loader profile and of the on-disk cordis.patch.yml layers, then reports the conflicts that fail silently: a fiber stuck PENDING on a service no plugin provides, a tool id two plugins both register, duplicate Loader entry ids, a row disabled by one layer and re-inserted by another, and a plugin importing a host symbol the running host does not export. Every finding carries its evidence and the exact patch that fixes it."
-  zh: "DSH 插件冲突诊断与修复建议。把运行期能力图谱与磁盘上的 cordis.patch.yml 层对齐，检出那些不会自己报错的静默故障：卡在 PENDING 等待无人提供的服务、两个插件注册同一个 tool id、Loader entry id 重复、某层停用又被后一层重新插入的行、以及插件导入了运行宿主并不导出的符号。每条结论都带证据与可直接粘贴的修复。"
+  en: 'Conflict diagnosis and repair for DeepSeek Harness plugins. Builds a capability graph of the running Loader profile and of the on-disk cordis.patch.yml layers, then reports the conflicts that fail silently: a fiber stuck PENDING on a service no plugin provides, a tool id two plugins both register, duplicate Loader entry ids, a row disabled by one layer and re-inserted by another, and a plugin importing a host symbol the running host does not export. Every finding carries its evidence and the exact patch that fixes it.'
+  zh: 'DSH 插件冲突诊断与修复建议。把运行期能力图谱与磁盘上的 cordis.patch.yml 层对齐，检出那些不会自己报错的静默故障：卡在 PENDING 等待无人提供的服务、两个插件注册同一个 tool id、Loader entry id 重复、某层停用又被后一层重新插入的行、以及插件导入了运行宿主并不导出的符号。每条结论都带证据与可直接粘贴的修复。'

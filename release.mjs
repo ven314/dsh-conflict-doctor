@@ -168,15 +168,36 @@ async function api(token, path, init = {}) {
 /** Validate the catalog entry against the schema contributing.md documents. */
 function validateEntry() {
   const CATEGORIES = [
-    'agi', 'ui', 'usage', 'theme', 'model', 'identity', 'session', 'memory', 'tools',
-    'wsl', 'browser', 'vision', 'voice', 'docs', 'skill', 'workflow', 'git', 'notify',
-    'dev', 'security', 'remote', 'market', 'fun',
+    'agi',
+    'ui',
+    'usage',
+    'theme',
+    'model',
+    'identity',
+    'session',
+    'memory',
+    'tools',
+    'wsl',
+    'browser',
+    'vision',
+    'voice',
+    'docs',
+    'skill',
+    'workflow',
+    'git',
+    'notify',
+    'dev',
+    'security',
+    'remote',
+    'market',
+    'fun',
   ]
   const problems = []
   const get = (key) => new RegExp(`^${key}:\\s*(.+)$`, 'm').exec(ENTRY_BODY)?.[1]
   if (get('url') !== `https://github.com/${OWNER}/${REPO}`) problems.push('url must match the repo exactly')
   if (get('name') !== `${OWNER}/${REPO}`) problems.push('name must be owner/repo')
-  if (!CATEGORIES.includes(get('category'))) problems.push(`category must be one of the documented values (got ${get('category')})`)
+  if (!CATEGORIES.includes(get('category')))
+    problems.push(`category must be one of the documented values (got ${get('category')})`)
   const en = /^\s{2}en:\s*"(.+)"\s*$/m.exec(ENTRY_BODY)?.[1]
   const zh = /^\s{2}zh:\s*"(.+)"\s*$/m.exec(ENTRY_BODY)?.[1]
   if (!en?.endsWith('.')) problems.push('description.en must end with a period')
@@ -195,12 +216,18 @@ async function main() {
   const whoami = probeNpm(['whoami'])
   const npmAuthed = whoami.ok && !/ENEEDAUTH|need auth/i.test(whoami.out)
 
+  // W0-11: say what to do, not what npm said. `ENEEDAUTH` is a stack-trace-free
+  // dead end for a maintainer who has simply never logged in on this machine.
+  const loginHint =
+    '→ no npm login on this machine. Run `npm login`, then re-run this command.\n' +
+    '    (npm needs an interactive browser/OTP step, so it cannot be automated here.)'
+
   if (PUBLISH) {
     if (DRY && !npmAuthed) {
       skip('npm logged in', '(expected before `npm login`; --dry continues)')
-    } else if (!check('npm logged in', npmAuthed, npmAuthed ? whoami.out : '→ run `npm login`')) {
-      log('\n  npm publish needs your npm account, so this stops here.')
-      log('  Run `npm login`, then re-run: node release.mjs')
+      log(`  ${loginHint}`)
+    } else if (!check('npm logged in', npmAuthed, npmAuthed ? whoami.out : '')) {
+      log(`\n  ${loginHint}`)
       process.exitCode = 1
       return
     }
@@ -219,15 +246,50 @@ async function main() {
 
   const tests = probe(process.execPath, ['test/run.mjs'])
   const summary = /(\d+)\/(\d+) checks passed/.exec(tests.out)
-  check('test suite green', Boolean(summary) && summary[1] === summary[2], summary ? `${summary[1]}/${summary[2]}` : 'no summary line')
+  check(
+    'test suite green',
+    Boolean(summary) && summary[1] === summary[2],
+    summary ? `${summary[1]}/${summary[2]}` : 'no summary line',
+  )
 
   const meta = probe(process.execPath, ['test/check-metadata.mjs'])
   check('metadata checks green', meta.ok && !/FAIL/.test(meta.out))
 
-  // Someone could take the name between runs.
+  // W0-3: the version must agree across package.json, CHANGELOG and the tag.
+  // A tag whose version CHANGELOG never documented ships a release page with no
+  // notes, and notes without a tag cannot be reached.
+  const ver = probe(process.execPath, ['test/check-version.mjs'])
+  check('version agreed across package.json / CHANGELOG / tag', ver.ok, ver.ok ? pkg.version : ver.out.slice(0, 160))
+
+  // The name check flips role after the first release. Before it, the namecould
+  // have been taken by someone else in the window between two runs. After it,
+  // the name MUST resolve — publishing a 0.1.0 that already exists fails with a
+  // 403, and silently bumping past it would ship an unreviewed version.
   const view = probeNpm(['view', pkg.name, 'version'])
-  const nameFree = !view.ok || /E404|not found/i.test(view.out)
-  check('npm name still available', nameFree, nameFree ? pkg.name : view.out.split('\n')[0])
+  if (!view.ok || /E404|not found/i.test(view.out)) {
+    check('first release: npm name still available', true, pkg.name)
+  } else {
+    check('published name resolves to this package', true, `${pkg.name}@${view.out.split('\n')[0]}`)
+    const publishedVersions = probeNpm(['view', pkg.name, 'versions', '--json'])
+    let known
+    try {
+      known = JSON.parse(publishedVersions.out)
+    } catch {
+      known = []
+    }
+    const already = Array.isArray(known) && known.includes(pkg.version)
+    if (
+      PUBLISH &&
+      !DRY &&
+      check(
+        'this version is not already published',
+        !already,
+        already ? `${pkg.version} exists on npm — bump package.json version first` : `${pkg.version} is new`,
+      )
+    ) {
+      // falls through to publish
+    }
+  }
 
   // The catalog entry is a deliverable: validate it before it is ever submitted.
   writeFileSync(ENTRY_PATH, ENTRY_BODY)
@@ -254,7 +316,11 @@ async function main() {
       } catch {
         files = undefined
       }
-      check('tarball builds', packed.ok && Array.isArray(files) && files.length > 0, files ? `${files.length} files` : packed.out.slice(0, 160))
+      check(
+        'tarball builds',
+        packed.ok && Array.isArray(files) && files.length > 0,
+        files ? `${files.length} files` : packed.out.slice(0, 160),
+      )
       for (const required of ['package.json', 'cordis.patch.yml', 'lib/index.js', 'README.md', 'LICENSE']) {
         check(`tarball has ${required}`, Array.isArray(files) && files.includes(required))
       }
@@ -351,7 +417,11 @@ async function main() {
                 ].join('\n'),
               }),
             })
-            check('PR opened', pr.status === 201, pr.json?.html_url ?? `HTTP ${pr.status}: ${JSON.stringify(pr.json).slice(0, 200)}`)
+            check(
+              'PR opened',
+              pr.status === 201,
+              pr.json?.html_url ?? `HTTP ${pr.status}: ${JSON.stringify(pr.json).slice(0, 200)}`,
+            )
             if (pr.json?.html_url) log(`  ${pr.json.html_url}`)
           }
         }

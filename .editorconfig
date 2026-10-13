@@ -1,0 +1,19 @@
+# Trim trailing whitespace and require a final newline: both are diff noise a
+# reviewer should never have to read past. LF everywhere because the diagnostics
+# are Windows-facing yet the repo is consumed by npm and CI runners alike.
+[*]
+end_of_line = lf
+insert_final_newline = true
+trim_trailing_whitespace = true
+charset = utf-8
+
+[*.{ts,js,mjs}]
+indent_style = space
+indent_size = 2
+
+[*.{json,yml,yaml}]
+indent_style = space
+indent_size = 2
+
+[*.md]
+trim_trailing_whitespace = false

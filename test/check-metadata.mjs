@@ -21,15 +21,27 @@ for (const host of ['0.1.0-rc.6', '0.1.7-rc.2', '0.2.0-rc.2']) {
 }
 
 console.log('\n  key checks:')
+const script = (name) => typeof pkg.scripts?.[name] === 'string'
+const gate = pkg.scripts?.prepublishOnly ?? ''
 const checks = [
   ['name is the available one', pkg.name === 'dsh-conflict-doctor'],
   ['no publishConfig blocking public access', pkg.publishConfig === undefined || pkg.publishConfig.access === 'public'],
   ['lib is shipped', pkg.files.includes('lib')],
   ['patch file is shipped', pkg.files.includes('cordis.patch.yml')],
   ['LICENSE is shipped', pkg.files.includes('LICENSE')],
-  ['peer deps are host-provided', '@deepseek-ai/dsh-tools' in pkg.peerDependencies && !('@deepseek-ai/dsh-tools' in pkg.dependencies)],
+  [
+    'peer deps are host-provided',
+    '@deepseek-ai/dsh-tools' in pkg.peerDependencies && !('@deepseek-ai/dsh-tools' in pkg.dependencies),
+  ],
   ['prepublishOnly gates the release', typeof pkg.scripts.prepublishOnly === 'string'],
   ['dsh keywords present', pkg.keywords.includes('dsh-plugin') && pkg.keywords.includes('deepseek-harness')],
+  // W0-4: the release gate must actually run every verification we ship, or it
+  // is decoration. Each entry below is a real script this repo has.
+  ['prepublishOnly runs build and test', /pnpm build/.test(gate) && /pnpm test/.test(gate)],
+  ['prepublishOnly runs the metadata gate', /check-metadata/.test(gate)],
+  ['prepublishOnly runs the version gate', /check-version/.test(gate)],
+  ['a version-check script exists', script('check:version')],
+  ['a format check exists', script('format:check')],
 ]
 let failed = 0
 for (const [label, ok] of checks) {

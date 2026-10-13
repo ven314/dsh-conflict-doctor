@@ -123,19 +123,18 @@ export function collectLive(ctx: Context): LiveSnapshot {
   const declaredProvides: LiveProvided[] = []
 
   if (loader === undefined || typeof loader.entries !== 'function') {
-    notes.push('service "loader" is unavailable: the live Loader tree could not be read (a non-Loader composition, e.g. headless or SDK, has no entry tree)')
+    notes.push(
+      'service "loader" is unavailable: the live Loader tree could not be read (a non-Loader composition, e.g. headless or SDK, has no entry tree)',
+    )
   } else {
     for (const entry of loader.entries()) {
       const fiber = entry.fiber
-      const declaredInject = fiber === undefined
-        ? injectNames(read(entry.options, 'inject'))
-        : injectNames(read(fiber, 'inject'))
+      const declaredInject = fiber === undefined ? injectNames(read(entry.options, 'inject')) : injectNames(read(fiber, 'inject'))
       const missing = declaredInject.filter((name) => ctx.get(name as never) === undefined)
-      const provides = fiber === undefined
-        ? []
-        : impls
-            .filter((impl) => impl.fiber === fiber && typeof impl.name === 'string')
-            .map((impl) => impl.name as string)
+      const provides =
+        fiber === undefined
+          ? []
+          : impls.filter((impl) => impl.fiber === fiber && typeof impl.name === 'string').map((impl) => impl.name as string)
 
       const state = read(fiber, 'state')
       const error = errorText(read(fiber, '_error'))
@@ -146,9 +145,10 @@ export function collectLive(ctx: Context): LiveSnapshot {
       // distinguishes "nobody provides this service" from "the provider is the
       // very plugin that is stuck" — a self-inflicted PENDING cycle, which is a
       // different diagnosis with a different fix.
-      const declaredProvide = fiber === undefined
-        ? read(entry.options, 'provide')
-        : (read(read(fiber, 'runtime'), 'provide') ?? read(entry.options, 'provide'))
+      const declaredProvide =
+        fiber === undefined
+          ? read(entry.options, 'provide')
+          : (read(read(fiber, 'runtime'), 'provide') ?? read(entry.options, 'provide'))
       for (const service of provideNames(declaredProvide)) declaredProvides.push({ service, entryId, moduleName })
 
       entries.push({
@@ -156,7 +156,7 @@ export function collectLive(ctx: Context): LiveSnapshot {
         moduleName,
         enabled: entry.disabled !== true,
         group: read(entry.options, 'group') === true,
-        fiberPhase: fiber === undefined ? null : PHASE[typeof state === 'number' ? state : 0] ?? null,
+        fiberPhase: fiber === undefined ? null : (PHASE[typeof state === 'number' ? state : 0] ?? null),
         ...(fiber === undefined ? {} : { pluginName: ownerOf(fiber) }),
         inject: declaredInject,
         missingInject: missing,

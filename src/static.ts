@@ -78,11 +78,7 @@ function readText(file: string): string | undefined {
 
 /** Resolve an installed package directory across the layouts DSH uses. */
 function packageDir(profilePath: string, name: string, extraRoots: readonly string[]): string | undefined {
-  const roots = [
-    join(profilePath, 'node_modules'),
-    resolve(profilePath, '..', 'node_modules'),
-    ...extraRoots,
-  ]
+  const roots = [join(profilePath, 'node_modules'), resolve(profilePath, '..', 'node_modules'), ...extraRoots]
   for (const root of roots) {
     const dir = join(root, ...name.split('/'))
     if (existsSync(join(dir, 'package.json'))) return dir
@@ -91,7 +87,10 @@ function packageDir(profilePath: string, name: string, extraRoots: readonly stri
 }
 
 /** One patch node as parsed from YAML: either an `insert:` list or an id-addressed row. */
-function asRows(document: unknown): { inserts: Omit<PatchInsert, 'layerIndex'>[]; overrides: Omit<PatchOverride, 'layerIndex'>[] } {
+function asRows(document: unknown): {
+  inserts: Omit<PatchInsert, 'layerIndex'>[]
+  overrides: Omit<PatchOverride, 'layerIndex'>[]
+} {
   const inserts: Omit<PatchInsert, 'layerIndex'>[] = []
   const overrides: Omit<PatchOverride, 'layerIndex'>[] = []
   if (!Array.isArray(document)) return { inserts, overrides }

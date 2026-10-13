@@ -1,0 +1,23 @@
+node_modules/
+.pnpm-store/
+coverage/
+*.tgz
+*.log
+.DS_Store
+
+# Build output. lib/ is committed so a git-URL install works without a build
+# step, but it is generated — formatting it would fight `tsc` on every run.
+lib/
+
+# Generated artifacts and third-party trees.
+pnpm-lock.yaml
+CHANGELOG.md
+
+# New file types introduced while the plan landed.
+.prettiercache
+
+# Machine-written baselines; prettier reformatting them would fight the writer.
+test/golden/
+
+# local publish helpers (never ship credential-reading scripts)
+*.ps1

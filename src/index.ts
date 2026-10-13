@@ -73,9 +73,7 @@ export function defaultProfilePath(env: NodeJS.ProcessEnv = process.env): string
  * @returns bundle name → version, or undefined when the service is unavailable.
  */
 async function liveBundleVersions(ctx: Context): Promise<Record<string, string> | undefined> {
-  const manager = ctx.get('pluginManager' as never) as unknown as
-    | { listBundles?: () => Promise<unknown> }
-    | undefined
+  const manager = ctx.get('pluginManager' as never) as unknown as { listBundles?: () => Promise<unknown> } | undefined
   if (manager === undefined || typeof manager.listBundles !== 'function') return undefined
   try {
     const result = await Promise.resolve(manager.listBundles())
@@ -168,7 +166,7 @@ What it detects:
 
 Scope: "live" inspects the running process, "profile" reads the profile directory on disk, "all" (default) does both. Prefer "all" unless the user only asks about what is currently loaded.
 
-The report is a diagnosis, not a fix: every finding includes a repair to apply, but this tool changes nothing by itself.`;
+The report is a diagnosis, not a fix: every finding includes a repair to apply, but this tool changes nothing by itself.`
 
 /**
  * How many turns of model context may carry the alert before it is re-checked.
@@ -200,9 +198,7 @@ function criticalContextProvider(
 ) {
   return (): string => {
     const live = collectLive(ctx)
-    const liveCritical = detect({ live, nodeVersion: process.version }).filter(
-      (finding) => finding.severity === 'critical',
-    )
+    const liveCritical = detect({ live, nodeVersion: process.version }).filter((finding) => finding.severity === 'critical')
 
     // The disk half costs a filesystem scan of every loaded package, so it is
     // cached; the live half is re-derived on every assembly.
@@ -228,7 +224,9 @@ function criticalContextProvider(
       '',
       `当前组合存在 ${all.length} 个 critical 冲突。这些冲突不会自己报错，但会让插件静默失效：`,
       '',
-      ...all.slice(0, 8).map((finding) => `- **${finding.title}**（\`${finding.code}\`）→ 修复：${finding.fixes[0]?.label ?? '见报告'}`),
+      ...all
+        .slice(0, 8)
+        .map((finding) => `- **${finding.title}**（\`${finding.code}\`）→ 修复：${finding.fixes[0]?.label ?? '见报告'}`),
       ...(all.length > 8 ? [`- …以及另外 ${all.length - 8} 个`] : []),
       '',
       '需要完整证据与可粘贴的 patch 时，调用 `conflict_doctor` 工具或让用户执行 `/conflict-doctor`。',
@@ -245,80 +243,86 @@ function criticalContextProvider(
  * @param ctx - the host context; `tools` must be available.
  */
 export function apply(ctx: Context): void {
-  ctx.effect(() => ctx.tools.register(defineTool({
-    name: 'conflict_doctor',
-    description: TOOL_DESCRIPTION,
-    parameters: {
-      scope: {
-        type: 'string',
-        enum: ['live', 'profile', 'all'],
-        description: 'Which half of the audit to run. Defaults to "all".',
-      },
-      profilePath: {
-        type: 'string',
-        description: 'Profile directory to read for the static half. Defaults to the running profile (DSH_PROFILE_DIR).',
-      },
-      format: {
-        type: 'string',
-        enum: ['markdown', 'json'],
-        description: 'Response body format for the model-facing text. The structured fields are always returned.',
-      },
-    },
-    output: {
-      schema: {
-        type: 'object',
-        properties: {
-          summary: { type: 'json', required: true },
-          findings: { type: 'array', items: { type: 'json' }, required: true },
-          notes: { type: 'array', items: { type: 'string' }, required: true },
-          report: { type: 'string', required: true },
-          profilePath: { type: 'string', required: true },
-        },
-        additionalProperties: false,
-      },
-      render: (_args, value) => {
-        const record = value as unknown as { report?: unknown }
-        return [{ type: 'text', text: typeof record.report === 'string' ? record.report : JSON.stringify(value, null, 2) }]
-      },
-    },
-    async execute(args) {
-      const request = (args ?? {}) as { scope?: AuditScope; profilePath?: string; format?: 'markdown' | 'json' }
-      const report = await runAudit(ctx, {
-        scope: request.scope ?? 'all',
-        ...(request.profilePath === undefined ? {} : { profilePath: request.profilePath }),
-      })
-      // Fresh object literals (not the readonly interfaces) keep the value
-      // assignable to the declared lossless-JSON output schema.
-      return Promise.resolve({
-        summary: { ...report.summary },
-        findings: report.findings.map((finding) => ({
-          code: finding.code,
-          severity: finding.severity,
-          title: finding.title,
-          refs: [...finding.refs],
-          impact: finding.impact,
-          evidence: [...finding.evidence],
-          fixes: finding.fixes.map((fix) => ({
-            kind: fix.kind,
-            label: fix.label,
-            detail: fix.detail,
-            ...(fix.snippet === undefined ? {} : { snippet: fix.snippet }),
-          })),
-        })),
-        notes: [...report.notes],
-        profilePath: report.profilePath,
-        report: request.format === 'json' ? JSON.stringify(report, null, 2) : renderMarkdown(report),
-      })
-    },
-    presentCall(args) {
-      const request = (args ?? {}) as { scope?: AuditScope; profilePath?: string }
-      return {
-        card: 'generic',
-        kind: 'read',
-        title: `插件冲突审计 · scope=${request.scope ?? 'all'}${request.profilePath === undefined ? '' : ` · ${request.profilePath}`}`,
-      }
-    },
-  })), 'conflict-doctor: conflict_doctor tool')
+  ctx.effect(
+    () =>
+      ctx.tools.register(
+        defineTool({
+          name: 'conflict_doctor',
+          description: TOOL_DESCRIPTION,
+          parameters: {
+            scope: {
+              type: 'string',
+              enum: ['live', 'profile', 'all'],
+              description: 'Which half of the audit to run. Defaults to "all".',
+            },
+            profilePath: {
+              type: 'string',
+              description: 'Profile directory to read for the static half. Defaults to the running profile (DSH_PROFILE_DIR).',
+            },
+            format: {
+              type: 'string',
+              enum: ['markdown', 'json'],
+              description: 'Response body format for the model-facing text. The structured fields are always returned.',
+            },
+          },
+          output: {
+            schema: {
+              type: 'object',
+              properties: {
+                summary: { type: 'json', required: true },
+                findings: { type: 'array', items: { type: 'json' }, required: true },
+                notes: { type: 'array', items: { type: 'string' }, required: true },
+                report: { type: 'string', required: true },
+                profilePath: { type: 'string', required: true },
+              },
+              additionalProperties: false,
+            },
+            render: (_args, value) => {
+              const record = value as unknown as { report?: unknown }
+              return [{ type: 'text', text: typeof record.report === 'string' ? record.report : JSON.stringify(value, null, 2) }]
+            },
+          },
+          async execute(args) {
+            const request = (args ?? {}) as { scope?: AuditScope; profilePath?: string; format?: 'markdown' | 'json' }
+            const report = await runAudit(ctx, {
+              scope: request.scope ?? 'all',
+              ...(request.profilePath === undefined ? {} : { profilePath: request.profilePath }),
+            })
+            // Fresh object literals (not the readonly interfaces) keep the value
+            // assignable to the declared lossless-JSON output schema.
+            return Promise.resolve({
+              summary: { ...report.summary },
+              findings: report.findings.map((finding) => ({
+                code: finding.code,
+                severity: finding.severity,
+                title: finding.title,
+                refs: [...finding.refs],
+                impact: finding.impact,
+                evidence: [...finding.evidence],
+                fixes: finding.fixes.map((fix) => ({
+                  kind: fix.kind,
+                  label: fix.label,
+                  detail: fix.detail,
+                  ...(fix.snippet === undefined ? {} : { snippet: fix.snippet }),
+                })),
+              })),
+              notes: [...report.notes],
+              profilePath: report.profilePath,
+              report: request.format === 'json' ? JSON.stringify(report, null, 2) : renderMarkdown(report),
+            })
+          },
+          presentCall(args) {
+            const request = (args ?? {}) as { scope?: AuditScope; profilePath?: string }
+            return {
+              card: 'generic',
+              kind: 'read',
+              title: `插件冲突审计 · scope=${request.scope ?? 'all'}${request.profilePath === undefined ? '' : ` · ${request.profilePath}`}`,
+            }
+          },
+        }),
+      ),
+    'conflict-doctor: conflict_doctor tool',
+  )
 
   // The command registry is optional: a composition without it still gets the
   // tool and the alert. Commands are read through ctx.get so a missing registry
@@ -334,21 +338,24 @@ export function apply(ctx: Context): void {
     | undefined
 
   if (commands !== undefined && typeof commands.register === 'function') {
-    ctx.effect(() => commands.register({
-      name: 'conflict-doctor',
-      description: '诊断插件冲突：谁和谁撞了、为什么没生效，以及该改哪一行',
-      handler: async () => {
-        const report = await runAudit(ctx, { scope: 'all' })
-        return { kind: 'success' as const, text: `${renderHeadline(report)}\n\n${renderMarkdown(report)}` }
-      },
-    }), 'conflict-doctor: /conflict-doctor command')
+    ctx.effect(
+      () =>
+        commands.register({
+          name: 'conflict-doctor',
+          description: '诊断插件冲突：谁和谁撞了、为什么没生效，以及该改哪一行',
+          handler: async () => {
+            const report = await runAudit(ctx, { scope: 'all' })
+            return { kind: 'success' as const, text: `${renderHeadline(report)}\n\n${renderMarkdown(report)}` }
+          },
+        }),
+      'conflict-doctor: /conflict-doctor command',
+    )
   }
 
   // Proactive half: with no finding the contributed text is empty, so a healthy
   // profile pays nothing. The system-prompt registry is likewise optional.
   const systemPrompt = ctx.get('systemPrompt' as never) as unknown as
-    | { context: (context: { name: string; order: number; text: () => string }) => () => void }
-    | undefined
+    { context: (context: { name: string; order: number; text: () => string }) => () => void } | undefined
   if (systemPrompt !== undefined && typeof systemPrompt.context === 'function') {
     const cache: { at: number; findings: readonly Finding[]; versions?: Readonly<Record<string, string>> } = {
       at: 0,
@@ -363,11 +370,12 @@ export function apply(ctx: Context): void {
       })
       .catch(() => undefined)
     ctx.effect(
-      () => systemPrompt.context({
-        name: 'conflict-doctor:critical-conflicts',
-        order: 50,
-        text: criticalContextProvider(ctx, cache),
-      }),
+      () =>
+        systemPrompt.context({
+          name: 'conflict-doctor:critical-conflicts',
+          order: 50,
+          text: criticalContextProvider(ctx, cache),
+        }),
       'conflict-doctor: critical-conflict alert',
     )
   }

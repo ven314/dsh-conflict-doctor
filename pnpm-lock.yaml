@@ -30,6 +30,9 @@ importers:
       '@types/semver':
         specifier: ^7.5.8
         version: 7.8.0
+      prettier:
+        specifier: ^3.3.3
+        version: 3.9.10
       typescript:
         specifier: ^5.6.0
         version: 5.9.3
@@ -168,6 +171,11 @@ packages:
   '@types/semver@7.8.0':
     resolution: {integrity: sha512-1mAINjtQCXXeLkJ9ehXkwOcBpqtLxiVtKhpUf83DdRNdQKV0iXZpaHYqRr7nj+wvxuJzoAmAwXI+sCNMv1CzLQ==}
 
+  prettier@3.9.10:
+    resolution: {integrity: sha512-skGHTH1Yb9QvaTC4hWnRTzEYtCpApF0UMBPz+t/0ZPzP8ihefo/btKd+QA7pUE0fEwA1SbS/NmhyEcstdXOIdA==}
+    engines: {node: '>=14'}
+    hasBin: true
+
   semver@7.8.5:
     resolution: {integrity: sha512-Y7/KDsb8LjooZpwaqGyulO6DQlksgCncchHGk+sZIY4SBvUocMBEFH5Ur1fI4dV+Jvl0w6cjvucaIi40puRioA==}
     engines: {node: '>=10'}
@@ -304,6 +312,8 @@ snapshots:
       undici-types: 6.21.0
 
   '@types/semver@7.8.0': {}
+
+  prettier@3.9.10: {}
 
   semver@7.8.5: {}
 

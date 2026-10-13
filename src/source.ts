@@ -142,7 +142,10 @@ export function scanPackageSources(dir: string): PackageSources {
       if (specifier?.startsWith('@deepseek-ai/') && names !== undefined) {
         const bucket = imports.get(specifier) ?? new Set<string>()
         for (const raw of names.split(',')) {
-          const name = raw.trim().split(/\s+as\s+/)[0]?.trim()
+          const name = raw
+            .trim()
+            .split(/\s+as\s+/)[0]
+            ?.trim()
           if (name !== undefined && /^[A-Za-z_$][\w$]*$/.test(name)) bucket.add(name)
         }
         if (bucket.size > 0) imports.set(specifier, bucket)
