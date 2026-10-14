@@ -26,6 +26,7 @@ import { clearHostCaches, findHostRoot, isSafePackageName, readHostSurface } fro
 import { comparableRealm, readClientHalf, realmOf } from '../lib/realm.js'
 import { CONFIDENCE_LABEL, attribute, attributeAll, confidenceCounts } from '../lib/attribution.js'
 import { collectSurface } from '../lib/surface.js'
+import { collectLive } from '../lib/live.js'
 import { validateReport } from './check-schema.mjs'
 import { versionsComparable } from '../lib/detect.js'
 import {
@@ -1719,6 +1720,51 @@ await check('G7 the real profile attributes without inventing ambiguity', () => 
   assert.equal(counts.ambiguous, 0, `a healthy profile must not have same-realm ambiguity; got ${JSON.stringify(counts)}`)
   assert.equal(counts.unknown, 0, 'every declared name should have been seen by the scan')
   assert.ok(counts.certain > 0, 'the scan should settle at least one name')
+})
+
+await check('G8 a Loader-less composition discloses that it cannot see failures', async () => {
+  // Measured, and the measurement corrected a plan assumption. A duplicate
+  // service name is NOT a silent failure: cordis throws
+  // `service "shared" has been registered at <A>` and the second fiber lands in
+  // state 3. But in a bare container there is no Loader, so `collectLive` sees
+  // zero entries and reports NOTHING -- a failed plugin becomes invisible.
+  //
+  // So live/service-owner-ambiguous is unnecessary (the runtime names the
+  // conflict itself), and the real gap is disclosure. This pins the disclosure.
+  const ctx = new Context()
+  class First extends Service {
+    constructor(c) {
+      super(c, 'shared')
+    }
+  }
+  class Second extends Service {
+    constructor(c) {
+      super(c, 'shared')
+    }
+  }
+  const first = ctx.plugin(First)
+  await first
+  assert.equal(first.state, 2, 'the first provider must be active')
+
+  const second = ctx.plugin(Second)
+  let thrown
+  try {
+    await second
+  } catch (error) {
+    thrown = error
+  }
+  // The runtime reports the conflict with the owner's name; no detector needed.
+  assert.ok(thrown !== undefined, 'a duplicate service name must be a loud error')
+  assert.match(thrown.message, /has been registered/)
+  assert.equal(second.state, 3, 'the second provider fails')
+
+  const live = collectLive(ctx)
+  assert.equal(live.entries.length, 0, 'without a Loader there is no entry tree to enumerate')
+  assert.ok(
+    live.notes.some((note) => note.includes('未检查')),
+    `the note must say "0 findings means not examined", got: ${JSON.stringify(live.notes)}`,
+  )
+  await ctx.fiber.dispose()
 })
 
 /* ------------------------------------------------------------------ report */
