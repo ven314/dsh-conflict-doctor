@@ -17,7 +17,7 @@
  */
 import assert from 'node:assert/strict'
 import { join, resolve } from 'node:path'
-import { existsSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from 'node:fs'
+import { existsSync, mkdirSync, mkdtempSync, readdirSync, readFileSync, rmSync, writeFileSync } from 'node:fs'
 import { tmpdir } from 'node:os'
 import { Context, Service } from '@deepseek-ai/cordis'
 import { closeAsar, findNode, hasAsarPath, isAsarDir, listAsarDir, openAsar, readAsarFile, readAsarText } from '../lib/asar.js'
@@ -31,6 +31,7 @@ import { evaluateCondition, evaluateExpression } from '../lib/expr.js'
 import { RISK_LABEL, classifyRisk, findFixConflicts, isAutoApplicable, snippetRowId } from '../lib/fix.js'
 import { applySnippet, splitPatchDocument } from '../lib/patch-edit.js'
 import { dryRunAll, dryRunFix } from '../lib/dryrun.js'
+import { guardTarget, rollbackFromBackup, writeWithBackup } from '../lib/apply.js'
 import { validateReport } from './check-schema.mjs'
 import { versionsComparable } from '../lib/detect.js'
 import {
@@ -2406,6 +2407,70 @@ await check('N4 the real profile applies cleanly and reports honestly', () => {
     }
   }
 })
+
+/* ------------------------------------------------------------------ Part O */
+
+/**
+ * The one function allowed to write to a profile, and every guard around it.
+ *
+ * Tested against a throwaway directory, never the real profile. The refusals
+ * matter more than the successful write: a bug here damages a user's
+ * configuration, which is the worst outcome this tool can produce.
+ */
+const applyRoot = mkdtempSync(join(tmpdir(), 'apply-test-'))
+const applyProfile = join(applyRoot, 'profile')
+mkdirSync(applyProfile, { recursive: true })
+const applyPatch = join(applyProfile, 'cordis.patch.yml')
+const applyOriginal = '# user comment\n- id: a\n  config: {"x":1}\n'
+writeFileSync(applyPatch, applyOriginal)
+mkdirSync(join(applyProfile, 'node_modules'), { recursive: true })
+writeFileSync(join(applyProfile, 'node_modules', 'installed.yml'), 'installed\n')
+// A SIBLING whose name merely starts with the profile's.
+mkdirSync(join(applyRoot, 'profile-lookalike'), { recursive: true })
+writeFileSync(join(applyRoot, 'profile-lookalike', 'cordis.patch.yml'), 'lookalike\n')
+
+await check('O1 writes outside the profile are refused', () => {
+  assert.equal(guardTarget(applyProfile, join(applyRoot, 'evil.yml'))?.code, 'outside-profile')
+  assert.equal(guardTarget(applyProfile, join(applyProfile, '..', 'evil.yml'))?.code, 'outside-profile', 'traversal')
+})
+
+await check('O2 a sibling that only LOOKS like the profile is refused', () => {
+  // The prefix trap: a string `startsWith(root)` comparison would accept this,
+  // because "profile-lookalike" starts with "profile".
+  const refusal = guardTarget(applyProfile, join(applyRoot, 'profile-lookalike', 'cordis.patch.yml'))
+  assert.equal(refusal?.code, 'outside-profile')
+})
+
+await check('O3 node_modules and missing targets are refused', () => {
+  assert.equal(guardTarget(applyProfile, join(applyProfile, 'node_modules', 'installed.yml'))?.code, 'inside-node-modules')
+  assert.equal(guardTarget(applyProfile, join(applyProfile, 'nope.yml'))?.code, 'missing-target')
+})
+
+await check('O4 a permitted write keeps the original in a backup', () => {
+  const result = writeWithBackup(applyProfile, applyPatch, '- id: a\n  disabled: true\n', {
+    now: new Date('2026-10-14T10:00:00Z'),
+  })
+  assert.equal(result.ok, true)
+  if (!result.ok) return
+  assert.equal(readFileSync(applyPatch, 'utf8'), '- id: a\n  disabled: true\n', 'target updated')
+  assert.equal(readFileSync(result.backupPath, 'utf8'), applyOriginal, 'backup must hold the ORIGINAL bytes')
+  assert.ok(!/:\d/.test(result.backupPath), 'the backup name must be filesystem-safe')
+  // The write must not leave debris beside the target.
+  assert.deepEqual(
+    readdirSync(applyProfile).filter((name) => name.includes('tmp-write')),
+    [],
+    'no temporary file may survive',
+  )
+
+  // O5: rollback restores, and is itself guarded.
+  const back = rollbackFromBackup(applyProfile, result.backupPath)
+  assert.equal(back.ok, true)
+  assert.equal(readFileSync(applyPatch, 'utf8'), applyOriginal, 'rollback must restore the original')
+  const escaped = rollbackFromBackup(applyProfile, result.backupPath, join(applyRoot, 'evil.yml'))
+  assert.equal(escaped.ok, false, 'rollback must be guarded like any other write')
+})
+
+rmSync(applyRoot, { recursive: true, force: true })
 
 /* ------------------------------------------------------------------ report */
 
