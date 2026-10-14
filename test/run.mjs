@@ -2892,6 +2892,47 @@ await check('U1 every row-addressed patch fix carries a plan that matches its sn
   assert.ok(checked >= 2, `expected at least two row-addressed patch fixes in the fixture, got ${checked}`)
 })
 
+/* ------------------------------------------------------------------ Part V */
+
+/**
+ * W8-11 fuzz: the collector must not crash on malformed patch files.
+ *
+ * A real profile always has some stray YAML, stray JSON, or a manifest the
+ * tool has never seen before. The graceful path is to emit notes and keep
+ * going — a crash would make the whole audit useless.
+ */
+await check('V1 collectStatic never throws on malformed patch files', () => {
+  const dir = mkdtempSync(join(tmpdir(), 'fuzz-'))
+  const variants = [
+    '',
+    '- id: x\n  disabled: !!js process.platform === "win32"\n',
+    'not: a: list: at: all',
+    '- id: "unterminated\n  config: {',
+    '- id: x\n  name: a\n  config: { "a": 1, ',
+    '!!js "not a patch at all"',
+    '- id: x\n  inject: [webStartup]\n  name: a\n  config: { "a": 1 }',
+    '- id: x\n  disabled: true\n- id: x\n  disabled: true',
+    'a: b\n- id: x\n  config: { "a": 1 }',
+    'x'.repeat(100000),
+    '- id: x\n  config: !!js "evil()"',
+    'null',
+    '[]',
+    '42',
+    'true',
+    '- id: x\n  name: a\n  config: { "a": 1 }',
+    '- insert:\n    - id: a\n      name: b\n      config: { "c": 1 }',
+  ]
+  for (let i = 0; i < variants.length; i++) {
+    const d = join(tmpdir(), `fuzz-v${i}`)
+    mkdirSync(d, { recursive: true })
+    writeFileSync(join(d, 'cordis.patch.yml'), variants[i], 'utf8')
+    // Must not throw; notes are the graceful path.
+    const snap = collectStatic(d, [])
+    assert.ok(typeof snap.layers === 'object', `variant ${i} must return a snapshot`)
+    rmSync(d, { recursive: true, force: true })
+  }
+})
+
 /* ------------------------------------------------------------------ report */
 
 console.log(`\n${checks - failures.length}/${checks} checks passed`)
