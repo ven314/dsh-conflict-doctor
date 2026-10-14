@@ -225,6 +225,7 @@ export function collectStatic(
   extraRoots: readonly string[] = [],
   liveBundleVersions?: Readonly<Record<string, string>>,
   allowArchive = true,
+  patchOverrides?: ReadonlyMap<string, string>,
 ): StaticSnapshot {
   const notes: string[] = []
   const layers: PatchLayer[] = []
@@ -259,7 +260,10 @@ export function collectStatic(
 
   /** Apply one patch file as the next layer. */
   const applyLayer = (label: string, kind: 'bundle' | 'user', file: string, packageName?: string, version?: string): void => {
-    const text = readText(file)
+    // A dry run supplies replacement TEXT for one patch file so a proposed edit
+    // can be audited without writing anything to disk. Keyed by resolved path so
+    // a caller can pass either an absolute or a profile-relative path.
+    const text = patchOverrides?.get(resolve(file)) ?? readText(file)
     const index = layers.length
     if (text === undefined) {
       missingPatchFiles.push(packageName === undefined ? file : `${packageName} → ${file}`)

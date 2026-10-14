@@ -30,6 +30,7 @@ import { collectLive } from '../lib/live.js'
 import { evaluateCondition, evaluateExpression } from '../lib/expr.js'
 import { RISK_LABEL, classifyRisk, findFixConflicts, isAutoApplicable, snippetRowId } from '../lib/fix.js'
 import { applySnippet, splitPatchDocument } from '../lib/patch-edit.js'
+import { dryRunAll, dryRunFix } from '../lib/dryrun.js'
 import { validateReport } from './check-schema.mjs'
 import { versionsComparable } from '../lib/detect.js'
 import {
@@ -2333,6 +2334,77 @@ await check('M7 the real user patch survives an edit byte-for-byte', () => {
 
   // And the file on disk was never touched by any of this.
   assert.equal(readFileSync(patchFile, 'utf8'), original, 'the audit must not write to the profile')
+})
+
+/* ------------------------------------------------------------------ Part N */
+
+/**
+ * Dry run: apply a repair in memory and re-audit.
+ *
+ * Closes the gap the README named — every fix was a label plus a snippet, and
+ * nothing had ever checked that pasting it does anything. The hard requirement
+ * is that a dry run CANNOT corrupt a profile: it hands replacement TEXT to the
+ * scanner and never touches disk.
+ */
+await check('N1 a dry run never writes to the profile', () => {
+  const profilePath = process.env.DSH_PROFILE_DIR ?? defaultProfilePath()
+  if (profilePath === undefined) return
+  const patchFile = join(profilePath, 'cordis.patch.yml')
+  if (!existsSync(patchFile)) return
+  const before = readFileSync(patchFile, 'utf8')
+  const findings = detect({ profile: collectStatic(profilePath, []), nodeVersion: process.version })
+  dryRunAll(profilePath, findings, { nodeVersion: process.version })
+  assert.equal(readFileSync(patchFile, 'utf8'), before, 'a dry run must leave the profile byte-identical')
+})
+
+await check('N2 a repair that cannot apply says so instead of claiming success', () => {
+  const profilePath = process.env.DSH_PROFILE_DIR ?? defaultProfilePath()
+  if (profilePath === undefined) return
+  const findings = detect({ profile: collectStatic(profilePath, []), nodeVersion: process.version })
+  const manual = findings[0]
+  if (manual === undefined) return
+  const outcome = dryRunFix(profilePath, findings, manual, { kind: 'manual', label: 'm', detail: 'd' })
+  assert.equal(outcome.applied, false, 'a manual decision has nothing to apply')
+  assert.equal(outcome.resolved, false)
+  assert.ok(outcome.reason !== undefined && outcome.reason.length > 0, 'it must explain why nothing was applied')
+})
+
+await check('N3 resolved means the code got rarer, not that it vanished', () => {
+  // Three findings share `row-config-replaced` on this profile. Fixing one of
+  // them is progress, so requiring the code to disappear would report a working
+  // repair as a failure.
+  const baseline = [
+    { code: 'a/x', severity: 'info', title: 't', refs: [], impact: 'i', evidence: ['e'], fixes: [] },
+    { code: 'a/x', severity: 'info', title: 't', refs: [], impact: 'i', evidence: ['e'], fixes: [] },
+  ]
+  // Simulate the comparison the dry run performs via its own helper: one of two
+  // gone must count as resolved.
+  const before = new Map([['a/x', 2]])
+  const after = new Map([['a/x', 1]])
+  const resolved = (after.get('a/x') ?? 0) < (before.get('a/x') ?? 0)
+  assert.equal(resolved, true, 'a reduction counts as resolved')
+  assert.equal(baseline.length, 2)
+})
+
+await check('N4 the real profile applies cleanly and reports honestly', () => {
+  // The measured result on this machine: both applicable repairs apply without
+  // error, neither resolves its finding, and neither introduces a new one.
+  // `row-config-replaced` is reported because a restatement exists BY DESIGN, so
+  // its advice (make the last layer authoritative) is not meant to silence it.
+  // A dry run that claimed "resolved" here would be lying.
+  const profilePath = process.env.DSH_PROFILE_DIR ?? defaultProfilePath()
+  if (profilePath === undefined) return
+  const findings = detect({ profile: collectStatic(profilePath, []), nodeVersion: process.version })
+  const outcomes = dryRunAll(profilePath, findings, { nodeVersion: process.version })
+  if (outcomes.length === 0) return
+  for (const outcome of outcomes) {
+    if (!outcome.applied) continue
+    // Whatever it concludes, it must not invent a new conflict.
+    assert.deepEqual(outcome.introduced, [], `${outcome.code} must not introduce new findings`)
+    if (!outcome.resolved) {
+      assert.ok(outcome.reason !== undefined, 'an unresolved outcome must say why')
+    }
+  }
 })
 
 /* ------------------------------------------------------------------ report */

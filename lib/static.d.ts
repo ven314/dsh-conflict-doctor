@@ -24,7 +24,7 @@ export declare function scanDeclaredToolIds(dir: string): string[];
  *   versions were supplied. Set false for hermetic tests; default true.
  * @returns the static snapshot; missing files are reported as notes, never thrown.
  */
-export declare function collectStatic(profilePath: string, extraRoots?: readonly string[], liveBundleVersions?: Readonly<Record<string, string>>, allowArchive?: boolean): StaticSnapshot;
+export declare function collectStatic(profilePath: string, extraRoots?: readonly string[], liveBundleVersions?: Readonly<Record<string, string>>, allowArchive?: boolean, patchOverrides?: ReadonlyMap<string, string>): StaticSnapshot;
 /**
  * Compare the profile's on-disk core version against the running host's.
  *
