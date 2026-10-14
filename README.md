@@ -108,10 +108,13 @@ conflict_doctor { scope: "all" | "live" | "profile", profilePath?: string, forma
 
 ## 设计取向
 
-1. **只读。** 不注册服务、不改配置、不碰注册表，只读 + 报告。一个「治理」插件自己成为故障源是荒谬的。
+1. **默认只读。** 不注册服务、不改配置、不碰注册表，只读 + 报告。一个「治理」插件自己成为故障源是荒谬的。
+   但修复引擎提供了三条**不破坏这条线**的出路：`--dry-run` 在内存里试修、`--fix-out` 把修复写成
+   profile 旁的惰性文件（DSH 不加载，挑错也不影响运行）、`--apply` **尚未实现**。详见
+   [`docs/apply.md`](docs/apply.md)。
 2. **只有一个硬依赖 `tools`。** `loader`/`commands`/`systemPrompt`/`pluginManager` 全部在用时 `ctx.get`——一个诊断插件如果自己停在 PENDING 就是个笑话。注册全部包在 `ctx.effect()` 里，卸载时干净撤销。
 3. **宁缺毋滥。** 每条检测器都在真实 profile 上跑过并调过阈值。真实数据把第一版的 23 条噪音收敛到可执行的少数几条；宁可不报，也不拿错误基准报。
-4. **纯函数内核。** 采集（`live.ts` / `static.ts` / `source.ts` / `hostface.ts`）→ 检测（`detect.ts`）→ 渲染（`render.ts`）都是纯函数，可以用 fixture 单测，不需要启动 harness。103 项检查覆盖每个检测器的正例+反例、asar 字节布局、导出面提取、四态版本判定、表达式白名单、键级 config diff、inject 环、真实 profile 扫描、以及 Cordis 集成。
+4. **纯函数内核。** 采集（`live.ts` / `static.ts` / `source.ts` / `hostface.ts`）→ 检测（`detect.ts`）→ 渲染（`render.ts`）都是纯函数，可以用 fixture 单测，不需要启动 harness。140 项检查覆盖每个检测器的正例+反例、asar 字节布局、导出面提取、四态版本判定、表达式白名单、键级 config diff、inject 环、真实 profile 扫描、以及 Cordis 集成。
 
 ## 主动播报
 
@@ -132,7 +135,7 @@ conflict_doctor { scope: "all" | "live" | "profile", profilePath?: string, forma
 ```bash
 pnpm install
 pnpm build      # tsc -> lib/
-pnpm test       # 63 项检查：fixture 检测器 + asar/导出面 + 真实 profile 扫描 + Cordis 集成
+pnpm test       # 140 项检查：fixture 检测器 + asar/导出面 + 真实 profile 扫描 + Cordis 集成
 pnpm check      # 发布与质量门禁：元数据 / 版本 / tarball / 入口 / golden / 性能
 node test/check-metadata.mjs   # 发布元数据：name / engines.dsh / files / peer 声明
 ```
@@ -146,7 +149,7 @@ node test/check-metadata.mjs   # 发布元数据：name / engines.dsh / files / 
 - ~~把 findings 主动播报进系统提示~~ ✅ 已实现（`systemPrompt.context`，无冲突时 0 token）
 - ~~服务级冲突：两个插件提供同一个服务名~~ ✅ 已实现（realm 感知）
 - ~~对「属性级 API 缺失」做真实比对~~ ✅ 已实现（import ↔ 导出面），并在实测中修正了基准错误
-- ~~把版本权威性做彻底~~ ✅ 已实现：零依赖 asar 读取器 + 运行宿主导出面 + 四态判定（`archive-authoritative`）。实测在真实桌面 profile 上把结论从 5 条提升到 42 条，其中 32 条导入冲突经逐一核实为真
+- ~~把版本权威性做彻底~~ ✅ 已实现：零依赖 asar 读取器 + 运行宿主导出面 + 四态判定（`archive-authoritative`）。实测在真实桌面 profile 上把结论从 5 条提升到 45 条（44 条逐包 + 1 条把 32 条导入冲突聚成的根因结论），其中 32 条导入冲突经 archive 字节逐字核对为真
 - slot / 客户端侧冲突（需要 Client Provider 配合）
 - 补丁层语义模拟器：把「config 被替换」升级为键级 provenance，判出被丢掉的层是否必需
 - `live/outbound-tool-collision` 的时序预测：结合 fiber 的 `inject` 等待状态，预告「这一行一旦激活就会撞」
