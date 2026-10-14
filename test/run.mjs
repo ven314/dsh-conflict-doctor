@@ -1330,6 +1330,103 @@ await check('E20 exit codes follow the --fail-on threshold', () => {
   assert.throws(() => parseFailOn('warn'), /--fail-on/)
 })
 
+await check('E21 a subpath the host denies is critical; a missing package is not', () => {
+  // Two different failures share the "subpath import" shape, and conflating
+  // them would overstate one:
+  //   - package exists but its `exports` map denies the subpath: Node throws
+  //     ERR_PACKAGE_PATH_NOT_EXPORTED even though the file is on disk -> critical
+  //   - the package is not in the running host at all: also broken, but a
+  //     different root cause and fix -> warning
+  const base = {
+    profilePath: '/fake',
+    layers: [],
+    inserts: [],
+    overrides: [],
+    missingPatchFiles: [],
+    unresolvedBundles: [],
+    declaredTools: {},
+    declaredServices: {},
+    sourceFacts: {},
+    versionAuthority: 'archive-authoritative',
+    packages: [],
+  }
+
+  // Only meaningful where a host archive exists: without one every manifest read
+  // is undefined and the detector must stay silent rather than guess.
+  if (readHostSurface('@deepseek-ai/dsh-llm') !== undefined) {
+    // Real case from this machine: dsh-client-connection imports
+    // @deepseek-ai/dsh-host-apiproxy/api, and that package is not in the host.
+    const missing = detect({
+      profile: { ...base, declaredImports: { 'plugin-a': { '@deepseek-ai/dsh-host-apiproxy/api': ['x'] } } },
+      nodeVersion: process.version,
+    }).filter((f) => f.code === 'profile/host-subpath-not-exported')
+    assert.equal(missing.length, 1, 'a package absent from the running host must be reported')
+    assert.equal(missing[0].severity, 'warning', 'a missing package is not an exports violation')
+    assert.ok(missing[0].refs.includes('@deepseek-ai/dsh-host-apiproxy/api'))
+    assert.ok(
+      missing[0].evidence.some((line) => line.includes('archive')),
+      'the evidence must say how it was established',
+    )
+
+    // Subpaths the host really does export must not fire.
+    const allowed = detect({
+      profile: {
+        ...base,
+        declaredImports: {
+          'plugin-b': { '@deepseek-ai/dsh-session/surface': ['y'], '@deepseek-ai/dsh-llm/message': ['z'] },
+        },
+      },
+      nodeVersion: process.version,
+    }).filter((f) => f.code === 'profile/host-subpath-not-exported')
+    assert.equal(allowed.length, 0, 'an exported subpath must not be flagged')
+  }
+
+  // Community packages are the plugin's own business: only @deepseek-ai/* is judged,
+  // because their layouts are not this tool's contract to police.
+  const community = detect({
+    profile: { ...base, declaredImports: { 'plugin-c': { 'some-community-pkg/deep/thing': ['q'] } } },
+    nodeVersion: process.version,
+  }).filter((f) => f.code === 'profile/host-subpath-not-exported')
+  assert.equal(community.length, 0, 'community subpaths are out of scope')
+})
+
+await check('E22 a denied subpath on a closed exports map is critical', () => {
+  // E21 proved the "package missing" branch on real data. This proves the other
+  // one, which is the harder case: the package IS present and its exports map is
+  // a closed list, so a subpath outside it throws ERR_PACKAGE_PATH_NOT_EXPORTED
+  // at import time even though the file may exist on disk.
+  //
+  // The subject must be a @deepseek-ai package (community ones are out of scope)
+  // AND have no wildcard key: dsh-session exports ./src/*, so nothing is
+  // provably denied there and the detector correctly stays silent.
+  if (readHostSurface('@deepseek-ai/dsh-agent-loop') === undefined) return
+
+  const denied = detect({
+    profile: {
+      profilePath: '/fake',
+      layers: [],
+      inserts: [],
+      overrides: [],
+      missingPatchFiles: [],
+      unresolvedBundles: [],
+      declaredTools: {},
+      declaredServices: {},
+      sourceFacts: {},
+      packages: [],
+      versionAuthority: 'archive-authoritative',
+      declaredImports: { 'plugin-x': { '@deepseek-ai/dsh-agent-loop/not-in-the-map': ['a'] } },
+    },
+    nodeVersion: process.version,
+  }).filter((f) => f.code === 'profile/host-subpath-not-exported')
+
+  assert.equal(denied.length, 1, 'a subpath absent from a closed exports map must be reported')
+  assert.equal(denied[0].severity, 'critical', 'a denied subpath breaks the import outright')
+  assert.ok(
+    denied[0].evidence.some((line) => line.includes('exports')),
+    'the evidence must name the exports map as the reason',
+  )
+})
+
 /* ------------------------------------------------------------------ report */
 
 console.log(`\n${checks - failures.length}/${checks} checks passed`)

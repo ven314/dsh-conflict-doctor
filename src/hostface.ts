@@ -95,6 +95,7 @@ const surfaceCache = new Map<string, ExportSurface | undefined>()
 /** Forget cached surfaces (used by tests and between audits). */
 export function clearHostCaches(): void {
   surfaceCache.clear()
+  manifestCache.clear()
   closeHostArchive()
   archiveLookupFailed = false
 }
@@ -245,8 +246,74 @@ export function hostHasBundle(name: string): boolean {
   const { archive, root } = opened
   try {
     return hasAsarPath(archive, packageDir('', root.modulesRoot, name).replace(/^\//, ''))
-  } finally {
-    closeAsar(archive)
+  } catch {
+    return false
+    // NOT closed here: the handle is shared and cached. Closing it would make
+    // every later read reopen (and re-decode) the archive.
+  }
+}
+
+/** A host package's manifest, as the running host ships it. */
+export interface HostManifest {
+  readonly name: string
+  readonly version: string
+  /**
+   * Subpaths the manifest's `exports` map allows, normalised to `./sub` form.
+   *
+   * `undefined` means the package declares NO `exports` map at all — which is
+   * NOT the same as "no subpath is importable". Without `exports`, Node resolves
+   * any path inside the package, so only a present-but-restrictive map can
+   * justify claiming a subpath is denied.
+   */
+  readonly subpaths?: readonly string[]
+  /** Whether the `exports` map contains a wildcard key such as `./src/*`. */
+  readonly wildcard: boolean
+}
+
+/** Manifests already read this process, keyed by package name. */
+const manifestCache = new Map<string, HostManifest | undefined>()
+
+/**
+ * Read one package's manifest FROM THE RUNNING HOST.
+ *
+ * @param name - package name.
+ * @returns the manifest, or undefined when the package is not in this host.
+ */
+export function readHostManifest(name: string): HostManifest | undefined {
+  if (!isSafePackageName(name)) return undefined
+  if (manifestCache.has(name)) return manifestCache.get(name)
+
+  const opened = openHostArchive()
+  if (opened === undefined) return undefined
+  const { archive, root } = opened
+  try {
+    const dir = packageDir('', root.modulesRoot, name).replace(/^\//, '')
+    const text = readAsarText(archive, `${dir}/package.json`)
+    if (text === undefined) {
+      manifestCache.set(name, undefined)
+      return undefined
+    }
+    const parsed = JSON.parse(text) as { name?: unknown; version?: unknown; exports?: unknown }
+    const exportsField = parsed.exports
+    let subpaths: string[] | undefined
+    let wildcard = false
+    if (typeof exportsField === 'string') {
+      subpaths = [exportsField]
+    } else if (exportsField !== null && typeof exportsField === 'object') {
+      subpaths = Object.keys(exportsField as Record<string, unknown>)
+      wildcard = subpaths.some((key) => key.includes('*'))
+    }
+    const manifest: HostManifest = {
+      name: typeof parsed.name === 'string' ? parsed.name : name,
+      version: typeof parsed.version === 'string' ? parsed.version : '(unknown)',
+      ...(subpaths === undefined ? {} : { subpaths }),
+      wildcard,
+    }
+    manifestCache.set(name, manifest)
+    return manifest
+  } catch {
+    manifestCache.set(name, undefined)
+    return undefined
   }
 }
 

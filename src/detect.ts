@@ -8,6 +8,7 @@
  */
 import type { Finding, Fix, LiveSnapshot, PatchInsert, PatchOverride, Severity, StaticSnapshot } from './types.js'
 import { lt, minVersion } from 'semver'
+import { readHostManifest } from './hostface.js'
 import { satisfiesRange } from './static.js'
 
 /** Rank used to sort findings by urgency and then by code. */
@@ -882,6 +883,94 @@ function detectUnresolvedHostImports(snapshot: StaticSnapshot): Finding[] {
   return findings
 }
 
+/**
+ * A host SUBPATH a plugin imports that the running host does not allow.
+ *
+ * Distinct from the symbol check, and worth its own code. Node throws
+ * ERR_PACKAGE_PATH_NOT_EXPORTED when a subpath is absent from a package's
+ * `exports` map — even if the file exists on disk. A symbol-level scan cannot
+ * see this: the import is rejected before any symbol is involved.
+ *
+ * The check is deliberately conservative about what it can prove:
+ * - only packages that HAVE an `exports` map can deny a subpath; without one
+ *   Node resolves any path inside the package;
+ * - a wildcard key (`./src/*`) means the map is not a closed list, so nothing is
+ *   denied;
+ * - a subpath key can map to several conditions; any key match counts.
+ *
+ * The third case found on a real profile: a plugin imports
+ * `@deepseek-ai/dsh-host-apiproxy/api`, and that package is not in the running
+ * host at all. That is a genuine broken import, reported here as well as by the
+ * package-level check.
+ */
+function detectHostSubpathNotExported(snapshot: StaticSnapshot): Finding[] {
+  if (!versionsComparable(snapshot)) return []
+  const findings: Finding[] = []
+  // Group by package so one broken subpath is one finding, not one per importer.
+  const offenders = new Map<string, { subpath: string; owners: Set<string>; existed: boolean }>()
+
+  for (const [owner, imports] of Object.entries(snapshot.declaredImports ?? {})) {
+    for (const specifier of Object.keys(imports)) {
+      // Only host packages are judged here; community deps are the plugin's own
+      // business and their layouts are not this tool's contract to police.
+      if (!specifier.startsWith('@deepseek-ai/')) continue
+      const parts = specifier.split('/')
+      // `@scope/name` is 2 segments; anything longer carries a subpath.
+      if (parts.length <= 2) continue
+      const pkg = `${parts[0]}/${parts[1]}`
+      const subpath = `./${parts.slice(2).join('/')}`
+      const manifest = readHostManifest(pkg)
+      if (manifest === undefined) {
+        // The package itself is missing from the host: the import fails at a
+        // deeper level than a subpath check, and the package-level check covers
+        // it. Recorded so the evidence stays honest.
+        const entry = offenders.get(specifier) ?? { subpath, owners: new Set<string>(), existed: false }
+        entry.owners.add(owner)
+        offenders.set(specifier, entry)
+        continue
+      }
+      // No `exports` map, or a wildcard inside it: nothing is denied.
+      if (manifest.subpaths === undefined || manifest.wildcard) continue
+      if (manifest.subpaths.some((key) => key === subpath || key === specifier)) continue
+      const entry = offenders.get(specifier) ?? { subpath, owners: new Set<string>(), existed: true }
+      entry.owners.add(owner)
+      offenders.set(specifier, entry)
+    }
+  }
+
+  for (const [specifier, entry] of [...offenders.entries()].sort(([a], [b]) => (a < b ? -1 : 1))) {
+    const owners = [...entry.owners].sort()
+    findings.push({
+      code: 'profile/host-subpath-not-exported',
+      severity: entry.existed ? 'critical' : 'warning',
+      title: entry.existed
+        ? `导入了宿主未通过 exports 暴露的子路径：“${specifier}”`
+        : `导入了运行宿主里并不存在的包：“${specifier}”`,
+      refs: [specifier, ...owners],
+      impact: entry.existed
+        ? 'Node 会直接抛 ERR_PACKAGE_PATH_NOT_EXPORTED：即使该文件在磁盘上真实存在，只要没写进 exports 就不允许从包外访问。这类失败发生在 import 那一刻，整个插件行加载失败。'
+        : '这个包不在运行宿主的 archive 里。import 会失败，插件整行加载失败；常见成因是插件按另一代宿主的模块划分写的。',
+      evidence: [
+        ...owners.map((owner) => `${owner} 导入 '${specifier}'`),
+        ...(entry.existed
+          ? [`exports 允许的子路径：${(readHostManifest(specifier.split('/').slice(0, 2).join('/'))?.subpaths ?? []).join(', ')}`]
+          : ['运行宿主的 archive 中不含该包。']),
+        '判定依据：exports 是允许清单，不在其中的子路径即使文件存在也会被拒绝。',
+      ],
+      fixes: [
+        {
+          kind: 'manual',
+          label: entry.existed
+            ? `改从已暴露的入口导入，或让宿主把 "${entry.subpath}" 加进 exports`
+            : '改用运行宿主里存在的等价模块，或安装提供它的那一代宿主',
+          detail: '先确认符号是否在包的根入口就能拿到——多数情况下根入口已经导出了同一个东西。',
+        },
+      ],
+    })
+  }
+  return findings
+}
+
 /* -------------------------------------------------------------------------- */
 /* Entry point                                                                */
 /* -------------------------------------------------------------------------- */
@@ -921,6 +1010,7 @@ export function detect(input: {
       ...detectDanglingOverride(input.profile),
       ...detectPeerRangeUnsatisfied(input.profile),
       ...detectUnresolvedHostImports(input.profile),
+      ...detectHostSubpathNotExported(input.profile),
       ...detectEngineUnsatisfied(input.profile, input.nodeVersion),
     )
   }

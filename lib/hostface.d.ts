@@ -64,4 +64,27 @@ export declare function collectHostFacts(): HostFacts | undefined;
 export declare function readHostSurface(name: string): ExportSurface | undefined;
 /** Whether a bundle exists in the running host at all. */
 export declare function hostHasBundle(name: string): boolean;
+/** A host package's manifest, as the running host ships it. */
+export interface HostManifest {
+    readonly name: string;
+    readonly version: string;
+    /**
+     * Subpaths the manifest's `exports` map allows, normalised to `./sub` form.
+     *
+     * `undefined` means the package declares NO `exports` map at all — which is
+     * NOT the same as "no subpath is importable". Without `exports`, Node resolves
+     * any path inside the package, so only a present-but-restrictive map can
+     * justify claiming a subpath is denied.
+     */
+    readonly subpaths?: readonly string[];
+    /** Whether the `exports` map contains a wildcard key such as `./src/*`. */
+    readonly wildcard: boolean;
+}
+/**
+ * Read one package's manifest FROM THE RUNNING HOST.
+ *
+ * @param name - package name.
+ * @returns the manifest, or undefined when the package is not in this host.
+ */
+export declare function readHostManifest(name: string): HostManifest | undefined;
 export { findHostRoot, resolveModulesRoot };

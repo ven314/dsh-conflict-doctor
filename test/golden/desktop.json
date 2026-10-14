@@ -1,7 +1,7 @@
 {
   "authority": "archive-authoritative",
-  "layers": 13,
-  "patchLayers": 13,
+  "layers": 12,
+  "patchLayers": 12,
   "hostOrigin": "installed app.asar",
   "hostHostVersion": "0.2.0-rc.2",
   "diskHostVersion": "0.1.0-rc.6",
@@ -10,7 +10,9 @@
     "info profile/module-under-multiple-ids",
     "info profile/peer-range-unsatisfied",
     "info profile/row-config-replaced x3",
+    "warning profile/dangling-override",
     "warning profile/host-import-unsatisfied x32",
+    "warning profile/host-subpath-not-exported",
     "warning profile/peer-range-unsatisfied"
   ]
 }
