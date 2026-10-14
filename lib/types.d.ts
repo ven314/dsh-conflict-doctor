@@ -156,7 +156,16 @@ export interface PatchInsert {
 export interface PatchOverride {
     readonly rowId: string;
     readonly moduleName?: string;
+    /** The effective value: a decided `!!js` condition is evaluated, not assumed. */
     readonly disabled: boolean;
+    /**
+     * Set when `disabled` came from a `!!js` expression the audit could NOT
+     * decide, so the value above is the safe default (`false`) rather than a fact.
+     *
+     * Distinguishing a decided `false` from an assumed `false` is the point: both
+     * behave identically downstream, but only the second one needs disclosing.
+     */
+    readonly disabledUndecided?: boolean;
     readonly hasConfig: boolean;
     readonly configJson: string;
     readonly layerIndex: number;

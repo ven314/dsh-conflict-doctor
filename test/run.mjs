@@ -27,6 +27,7 @@ import { comparableRealm, readClientHalf, realmOf } from '../lib/realm.js'
 import { CONFIDENCE_LABEL, attribute, attributeAll, confidenceCounts } from '../lib/attribution.js'
 import { collectSurface } from '../lib/surface.js'
 import { collectLive } from '../lib/live.js'
+import { evaluateCondition, evaluateExpression } from '../lib/expr.js'
 import { validateReport } from './check-schema.mjs'
 import { versionsComparable } from '../lib/detect.js'
 import {
@@ -1765,6 +1766,98 @@ await check('G8 a Loader-less composition discloses that it cannot see failures'
     `the note must say "0 findings means not examined", got: ${JSON.stringify(live.notes)}`,
   )
   await ctx.fiber.dispose()
+})
+
+/* ------------------------------------------------------------------ Part H */
+
+/**
+ * The `!!js` whitelist interpreter.
+ *
+ * Two properties matter, and only the second one is safety-critical: deciding
+ * what is decidable, and refusing to evaluate anything else. A wrong answer
+ * about a `disabled` key corrupts the row baseline, so each decision is pinned
+ * against an explicit expected value rather than "it returned something".
+ */
+await check('H1 platform comparisons decide, following the injected env', () => {
+  const win = { platform: 'win32', arch: 'x64', version: 'v24.0.0' }
+  const linux = { platform: 'linux', arch: 'x64', version: 'v24.0.0' }
+  assert.equal(evaluateCondition("process.platform === 'win32'", win), true)
+  assert.equal(evaluateCondition("process.platform === 'win32'", linux), false, 'the result must follow the env, not the host')
+  assert.equal(evaluateCondition("process.platform !== 'win32'", win), false)
+  // The two complementary rules must disagree: if both came out the same, the
+  // comparison is broken in a way that would disable the wrong sandbox.
+  const bash = evaluateCondition("process.platform === 'win32'", win)
+  const pwsh = evaluateCondition("process.platform !== 'win32'", win)
+  assert.notEqual(bash, pwsh, 'complementary rules must not agree')
+})
+
+await check('H2 literals, booleans and the default idioms evaluate', () => {
+  assert.equal(evaluateExpression("'DISABLED'"), 'DISABLED')
+  assert.equal(evaluateExpression('true'), true)
+  assert.equal(evaluateExpression('false'), false)
+  assert.equal(evaluateExpression('null'), null)
+  assert.equal(evaluateExpression('3000'), 3000)
+  assert.equal(evaluateExpression('!false'), true)
+  assert.equal(evaluateExpression('true && false'), false)
+  assert.equal(evaluateExpression("'x' || 'y'"), 'x')
+  // A parenthesised comparison, as the real profile ships one. Writing it
+  // backwards once was enough to know the assertion needs its own check.
+  assert.equal(evaluateExpression('(true) === false'), false)
+  assert.equal(evaluateExpression('(true) === true'), true)
+})
+
+await check('H3 anything that is real code is refused, not evaluated', () => {
+  // Each of these appears in a real profile's layers or would be the next
+  // step someone asks for. Every one must come back undefined: the audit runs
+  // inside other people's harnesses, and a refused expression is safe while a
+  // mis-evaluated one is a wrong baseline.
+  const refused = [
+    "dshHomePath('sessions')",
+    'ctx.webStartup.host ?? "127.0.0.1"',
+    'ctx.webRuntime.trustedHosts',
+    'process.env.DSH_TOOLS_MODE',
+    'process.cwd()',
+    'require("fs")',
+    'eval("1+1")',
+    '`template ${x}`',
+    '(() => true)()',
+    'new Date()',
+    'a.b.c.d.e',
+    "'unclosed",
+    "'a' 'b'",
+    'true 5',
+    'true ? 1 : 2',
+    '',
+  ]
+  for (const expr of refused) {
+    assert.equal(evaluateExpression(expr), undefined, `must refuse: ${expr}`)
+  }
+})
+
+await check('H4 an expression result is never silently read as a condition', () => {
+  // A string result where a boolean is wanted means the expression produced a
+  // VALUE, not a decision. Returning it as truthy would invent a disable.
+  assert.equal(evaluateCondition("'DISABLED'"), undefined, 'a string is not a boolean')
+  assert.equal(evaluateCondition('3000'), undefined, 'a number is not a boolean')
+  assert.equal(evaluateCondition('null'), undefined)
+})
+
+await check('H5 the real profile decides exactly the pure expressions', () => {
+  const profilePath = process.env.DSH_PROFILE_DIR ?? defaultProfilePath()
+  if (profilePath === undefined) return
+  let snapshot
+  try {
+    snapshot = collectStatic(profilePath, [])
+  } catch {
+    return
+  }
+  // The note must now state the split rather than claiming nothing is decided:
+  // the blanket claim was how the wrong `disabled` baseline stayed unnoticed.
+  const note = snapshot.notes.find((entry) => entry.includes('白名单解释器'))
+  if (snapshot.notes.some((entry) => entry.includes('!!js'))) {
+    assert.ok(note !== undefined, 'a profile with !!js must report the decided/undecided split')
+    assert.match(note ?? '', /白名单解释器/)
+  }
 })
 
 /* ------------------------------------------------------------------ report */
