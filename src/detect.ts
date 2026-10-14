@@ -299,38 +299,46 @@ function detectDisableThenReinsert(snapshot: StaticSnapshot): Finding[] {
   // id-addressed overrides, which mirrors how the Loader applies one file.
   order.sort((left, right) => left.layerIndex - right.layerIndex)
 
-  const state = new Map<string, { disabledAt: number }>()
-  const findings: Finding[] = []
+  // A re-insert is only a problem when the row ENDS UP enabled. Reporting it at the
+  // moment of re-insertion, without looking at what comes after, fires on a row the
+  // user later re-disabled — and then the impact line "实际它还在加载" is simply false:
+  // the row is not loaded. So defer every candidate and drop it if a later layer
+  // disables again; only the survivors are reported.
+  const disabledAt = new Map<string, number>()
+  const candidates = new Map<string, { disabledAt: number; enableLayerIndex: number }>()
   for (const step of order) {
-    const current = state.get(step.rowId)
     if (step.action === 'disable') {
-      state.set(step.rowId, { disabledAt: step.layerIndex })
+      disabledAt.set(step.rowId, step.layerIndex)
+      candidates.delete(step.rowId)
       continue
     }
-    if (current !== undefined) {
-      const disabledLayer = snapshot.layers[current.disabledAt]
-      const enableLayer = snapshot.layers[step.layerIndex]
-      findings.push({
-        code: 'profile/disable-then-reinsert',
-        severity: 'critical',
-        title: `“${step.rowId}” 被停用后又被重新插入`,
-        refs: [step.rowId, disabledLayer?.label ?? 'unknown', enableLayer?.label ?? 'unknown'],
-        impact: '用户以为自己停用了这个插件，实际它还在加载。这是「我明明关了它，怎么还生效」的直接成因。',
-        evidence: [
-          `第 ${current.disabledAt} 层停用：${disabledLayer?.label ?? '?'}`,
-          `第 ${step.layerIndex} 层又插入：${enableLayer?.label ?? '?'}`,
-        ],
-        fixes: [
-          {
-            kind: 'patch',
-            label: '把停用移到最后一层（用户 patch 永远最后生效）',
-            detail: '层序决定最终状态；社区包或模式包后插一行，就会把用户的停用盖掉。',
-            snippet: disableSnippet(step.rowId),
-          },
-        ],
-      })
-      state.delete(step.rowId)
-    }
+    const d = disabledAt.get(step.rowId)
+    if (d !== undefined) candidates.set(step.rowId, { disabledAt: d, enableLayerIndex: step.layerIndex })
+  }
+
+  const findings: Finding[] = []
+  for (const [rowId, { disabledAt: d, enableLayerIndex }] of candidates) {
+    const disabledLayer = snapshot.layers[d]
+    const enableLayer = snapshot.layers[enableLayerIndex]
+    findings.push({
+      code: 'profile/disable-then-reinsert',
+      severity: 'critical',
+      title: `“${rowId}” 被停用后又被重新插入`,
+      refs: [rowId, disabledLayer?.label ?? 'unknown', enableLayer?.label ?? 'unknown'],
+      impact: '用户以为自己停用了这个插件，实际它还在加载。这是「我明明关了它，怎么还生效」的直接成因。',
+      evidence: [
+        `第 ${d} 层停用：${disabledLayer?.label ?? '?'}`,
+        `第 ${enableLayerIndex} 层又插入：${enableLayer?.label ?? '?'}`,
+      ],
+      fixes: [
+        {
+          kind: 'patch',
+          label: '把停用移到最后一层（用户 patch 永远最后生效）',
+          detail: '层序决定最终状态；社区包或模式包后插一行，就会把用户的停用盖掉。',
+          snippet: disableSnippet(rowId),
+        },
+      ],
+    })
   }
   return findings
 }

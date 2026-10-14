@@ -178,6 +178,58 @@ await check('A3 disabled then re-inserted', () => {
   assert.equal(finding.refs[0], 'toggle-row')
 })
 
+await check('A3b a re-insert that is later re-disabled is not still loaded', () => {
+  // The row ends up DISABLED, so "实际它还在加载" would be a lie. The old code
+  // reported at the moment of re-insertion and never looked at what came after.
+  // A re-disable in a later layer must make the finding disappear.
+  function L(index, label, kind) {
+    return { index, label, kind }
+  }
+  const enabled = detect({
+    profile: {
+      profilePath: 'C:/fixture/profile',
+      layers: [L(0, 'b0', 'bundle'), L(1, 'b1', 'bundle'), L(2, 'b2', 'bundle')],
+      inserts: [
+        { rowId: 'r', moduleName: 'p', hasConfig: false, configJson: 'null', layerIndex: 0 },
+        { rowId: 'r', moduleName: 'p', hasConfig: false, configJson: 'null', layerIndex: 2 },
+      ],
+      overrides: [{ rowId: 'r', disabled: true, hasConfig: false, configJson: 'null', layerIndex: 1 }],
+      versionAuthority: 'authoritative',
+      missingPatchFiles: [],
+      unresolvedBundles: [],
+      packages: [],
+      declaredTools: {},
+      notes: [],
+    },
+    nodeVersion: '20.11.0',
+  }).filter((f) => f.code === 'profile/disable-then-reinsert')
+  assert.equal(enabled.length, 1, 'final state enabled must still be reported')
+  assert.equal(enabled[0].severity, 'critical')
+
+  const reDisabled = detect({
+    profile: {
+      profilePath: 'C:/fixture/profile',
+      layers: [L(0, 'b0', 'bundle'), L(1, 'b1', 'bundle'), L(2, 'b2', 'bundle'), L(3, 'user patch', 'user')],
+      inserts: [
+        { rowId: 'r', moduleName: 'p', hasConfig: false, configJson: 'null', layerIndex: 0 },
+        { rowId: 'r', moduleName: 'p', hasConfig: false, configJson: 'null', layerIndex: 2 },
+      ],
+      overrides: [
+        { rowId: 'r', disabled: true, hasConfig: false, configJson: 'null', layerIndex: 1 },
+        { rowId: 'r', disabled: true, hasConfig: false, configJson: 'null', layerIndex: 3 },
+      ],
+      versionAuthority: 'authoritative',
+      missingPatchFiles: [],
+      unresolvedBundles: [],
+      packages: [],
+      declaredTools: {},
+      notes: [],
+    },
+    nodeVersion: '20.11.0',
+  }).filter((f) => f.code === 'profile/disable-then-reinsert')
+  assert.equal(reDisabled.length, 0, 'a re-disabled row ends up disabled, so the "still loaded" claim would be false')
+})
+
 await check('A4 config replaced by a later layer', () => {
   const finding = findingFor(staticFindings, 'profile/row-config-replaced')
   // Layer restatement is the documented DSH contract, so it is advisory only.
