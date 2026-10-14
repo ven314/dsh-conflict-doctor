@@ -31,9 +31,17 @@ import { CONFIDENCE_LABEL, attribute, attributeAll, confidenceCounts } from '../
 import { collectSurface } from '../lib/surface.js'
 import { collectLive } from '../lib/live.js'
 import { evaluateCondition, evaluateExpression } from '../lib/expr.js'
-import { RISK_LABEL, classifyRisk, findFixConflicts, isAutoApplicable, snippetRowId } from '../lib/fix.js'
+import {
+  RISK_LABEL,
+  advisoryReason,
+  classifyRisk,
+  findFixConflicts,
+  isAdvisory,
+  isAutoApplicable,
+  snippetRowId,
+} from '../lib/fix.js'
 import { applySnippet, splitPatchDocument } from '../lib/patch-edit.js'
-import { dryRunAll, dryRunFix } from '../lib/dryrun.js'
+import { dryRunAll, dryRunFix, isFailure, renderDryRun } from '../lib/dryrun.js'
 import { guardTarget, rollbackFromBackup, writeFixFiles, writeWithBackup } from '../lib/apply.js'
 import { validateReport } from './check-schema.mjs'
 import { versionsComparable } from '../lib/detect.js'
@@ -2619,6 +2627,63 @@ await check('Q3 --fix-out writes files and leaves the profile alone', () => {
   assert.ok(readdirSync(outDir).includes('README.md'), 'a manifest must always be written')
   assert.equal(readFileSync(patchFile, 'utf8'), before, '--fix-out must never touch the profile')
   rmSync(outDir, { recursive: true, force: true })
+})
+
+/* ------------------------------------------------------------------ Part R */
+
+/**
+ * Advisory repairs: advice that is not meant to silence its own finding.
+ *
+ * `row-config-replaced` fires because a restatement exists, and that restatement
+ * IS the DSH contract. Its repair makes the last layer authoritative rather than
+ * removing the restatement, so the finding correctly survives it. Rendering that
+ * as ❌ was accurate and misleading at the same time — it sends a reader looking
+ * for a broken snippet that is behaving exactly as intended.
+ */
+await check('R1 row-config-replaced repairs are advisory, not expected to resolve', () => {
+  assert.equal(isAdvisory('profile/row-config-replaced'), true)
+  assert.ok((advisoryReason('profile/row-config-replaced') ?? '').length > 0, 'the reason must be stated, not implied')
+  // Codes whose repairs ARE expected to clear their finding must not be excused.
+  assert.equal(isAdvisory('live/pending-missing-service'), false)
+  assert.equal(isAdvisory('profile/host-import-unsatisfied'), false)
+  assert.equal(advisoryReason('live/pending-missing-service'), undefined)
+})
+
+await check('R2 an unresolved advisory repair is not reported as a failure', () => {
+  const unresolved = {
+    code: 'profile/row-config-replaced',
+    label: 'L',
+    applied: true,
+    resolved: false,
+    introduced: [],
+    before: ['profile/row-config-replaced'],
+    after: ['profile/row-config-replaced'],
+    reason: 'not fewer',
+  }
+  assert.equal(isFailure(unresolved), false, 'advice that changes nothing is not a broken repair')
+  const text = renderDryRun([unresolved])
+  assert.ok(text.includes('仅建议'), 'the table must say so in words')
+  assert.ok(!text.includes('❌'), 'and must not print a failure mark')
+
+  // The same shape under a code that IS expected to resolve must still fail.
+  const realFailure = { ...unresolved, code: 'profile/dangling-override' }
+  assert.equal(isFailure(realFailure), true, 'a genuinely unresolved repair must still read as one')
+  assert.ok(renderDryRun([realFailure]).includes('❌'))
+})
+
+await check('R3 the real dry run reports advisory outcomes without a failure mark', () => {
+  const profilePath = process.env.DSH_PROFILE_DIR ?? defaultProfilePath()
+  if (profilePath === undefined) return
+  const findings = detect({ profile: collectStatic(profilePath, []), nodeVersion: process.version })
+  const outcomes = dryRunAll(profilePath, findings, { nodeVersion: process.version })
+  const applied = outcomes.filter((o) => o.applied)
+  if (applied.length === 0) return
+  // Every applied outcome must be classified one way or the other: resolved, a
+  // real failure, or explicitly advisory. Nothing may be ambiguous.
+  for (const outcome of applied) {
+    const classified = outcome.resolved || isFailure(outcome) || isAdvisory(outcome.code)
+    assert.ok(classified, `${outcome.code} outcome is neither resolved, failing, nor advisory`)
+  }
 })
 
 /* ------------------------------------------------------------------ report */

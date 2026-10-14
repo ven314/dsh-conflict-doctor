@@ -128,6 +128,49 @@ export const RISK_LABEL: Readonly<Record<RiskLevel, string>> = {
   destructive: '有破坏性（停用/删除行或执行命令，会改变实际加载的内容）',
 }
 
+/* ------------------------------------------------------------------ advisory */
+
+/**
+ * Codes whose repairs are ADVICE rather than a resolution.
+ *
+ * A dry run reporting "not resolved" for one of these would be telling the truth
+ * while implying a failure. `profile/row-config-replaced` is the motivating case:
+ * restating a config across layers is DSH's own contract — every mode bundle
+ * restates its complete configuration — so the finding exists by design and its
+ * repair is "make the last layer authoritative", not "remove the restatement".
+ * Applying it leaves the finding in place, correctly.
+ *
+ * Only domain knowledge can decide this, which is why it is a short, documented
+ * list rather than something inferred from the snippet.
+ */
+const ADVISORY_CODES: ReadonlyMap<string, string> = new Map([
+  [
+    'profile/row-config-replaced',
+    '多层重述是 DSH 的既定契约（每个 mode bundle 重述自己的完整配置），该结论本身是设计上就存在的。' +
+      '建议的目的是让最后一层成为权威，而不是消除重述，所以套用后结论仍在是正常的。',
+  ],
+])
+
+/**
+ * Whether a repair is advice rather than something expected to clear its finding.
+ *
+ * @param code - the finding code.
+ * @returns true when a dry run should not read as a failure if nothing changed.
+ */
+export function isAdvisory(code: string): boolean {
+  return ADVISORY_CODES.has(code)
+}
+
+/**
+ * Why a repair is advisory, for the report.
+ *
+ * @param code - the finding code.
+ * @returns the explanation, or undefined when the code is not advisory.
+ */
+export function advisoryReason(code: string): string | undefined {
+  return ADVISORY_CODES.get(code)
+}
+
 /* ------------------------------------------------------------------ conflicts */
 
 /** One row that two or more fixes would change in incompatible ways. */

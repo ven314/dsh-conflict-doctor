@@ -92,6 +92,20 @@ export declare function isManual(kind: 'patch' | 'command' | 'manual'): boolean;
  * does not tell a reader whether their tools will stop loading.
  */
 export declare const RISK_LABEL: Readonly<Record<RiskLevel, string>>;
+/**
+ * Whether a repair is advice rather than something expected to clear its finding.
+ *
+ * @param code - the finding code.
+ * @returns true when a dry run should not read as a failure if nothing changed.
+ */
+export declare function isAdvisory(code: string): boolean;
+/**
+ * Why a repair is advisory, for the report.
+ *
+ * @param code - the finding code.
+ * @returns the explanation, or undefined when the code is not advisory.
+ */
+export declare function advisoryReason(code: string): string | undefined;
 /** One row that two or more fixes would change in incompatible ways. */
 export interface FixConflict {
     /** The row both fixes address. */

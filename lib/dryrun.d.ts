@@ -44,7 +44,21 @@ export declare function dryRunAll(profilePath: string, findings: readonly Findin
 /**
  * Render dry-run outcomes as a before/after table.
  *
+ * An advisory repair that changes nothing is reported as `ℹ️ 仅建议（不消除结论）`
+ * rather than as a failure. Saying ❌ would be accurate and misleading at once:
+ * a reader would go hunting for a broken snippet that is working as intended.
+ *
  * @param outcomes - results from {@link dryRunAll}.
  * @returns markdown lines, or a single line saying nothing was attempted.
  */
 export declare function renderDryRun(outcomes: readonly DryRunOutcome[]): string;
+/**
+ * Whether an unresolved outcome should read as a failure.
+ *
+ * False for an advisory repair, whose finding exists by design and is not meant
+ * to be silenced.
+ *
+ * @param outcome - the dry-run result.
+ * @returns true when the reader should treat the repair as not working.
+ */
+export declare function isFailure(outcome: DryRunOutcome): boolean;
