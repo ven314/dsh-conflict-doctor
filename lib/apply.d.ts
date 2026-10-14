@@ -1,3 +1,4 @@
+import type { Finding } from './types.js';
 /** Why a write was refused. */
 export interface ApplyRefusal {
     readonly ok: false;
@@ -57,3 +58,29 @@ export declare function writeWithBackup(profilePath: string, targetPath: string,
  * @returns the write outcome, or a refusal.
  */
 export declare function rollbackFromBackup(profilePath: string, backupPath: string, targetPath?: string): ApplyOutcome;
+/** One repair written out for a human to review and paste. */
+export interface FixFile {
+    /** Absolute path written. */
+    readonly path: string;
+    /** The finding it addresses. */
+    readonly code: string;
+    /** The risk level, so the manifest can warn before anyone pastes it. */
+    readonly risk: string;
+    readonly label: string;
+}
+/**
+ * Write each applicable repair as its own patch fragment.
+ *
+ * The middle ground between "here is prose" and "let me edit your config": the
+ * user gets real, paste-ready files they can read, pick from, and apply when they
+ * choose. Nothing in the profile is touched — a `.patch.yml` sitting beside
+ * `cordis.patch.yml` is inert, so a wrong pick cannot break anything.
+ *
+ * Filenames are derived from the finding CODE, never from a row id or package
+ * name, so nothing originating in user data can influence a path.
+ *
+ * @param outDir - directory to write into; created when absent.
+ * @param findings - the audit's findings.
+ * @returns the files written, in report order.
+ */
+export declare function writeFixFiles(outDir: string, findings: readonly Finding[]): FixFile[];

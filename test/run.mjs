@@ -22,6 +22,7 @@ import { existsSync, mkdirSync, mkdtempSync, readdirSync, readFileSync, rmSync, 
 import { spawnSync } from 'node:child_process'
 import { tmpdir } from 'node:os'
 import { Context, Service } from '@deepseek-ai/cordis'
+import YAML from 'yaml'
 import { closeAsar, findNode, hasAsarPath, isAsarDir, listAsarDir, openAsar, readAsarFile, readAsarText } from '../lib/asar.js'
 import { EXIT, SCHEMA_VERSION, exitCodeFor, parseFailOn } from '../lib/contract.js'
 import { clearHostCaches, findHostRoot, isSafePackageName, readHostSurface } from '../lib/hostface.js'
@@ -33,7 +34,7 @@ import { evaluateCondition, evaluateExpression } from '../lib/expr.js'
 import { RISK_LABEL, classifyRisk, findFixConflicts, isAutoApplicable, snippetRowId } from '../lib/fix.js'
 import { applySnippet, splitPatchDocument } from '../lib/patch-edit.js'
 import { dryRunAll, dryRunFix } from '../lib/dryrun.js'
-import { guardTarget, rollbackFromBackup, writeWithBackup } from '../lib/apply.js'
+import { guardTarget, rollbackFromBackup, writeFixFiles, writeWithBackup } from '../lib/apply.js'
 import { validateReport } from './check-schema.mjs'
 import { versionsComparable } from '../lib/detect.js'
 import {
@@ -2545,6 +2546,79 @@ await check('P5 --help documents --dry-run', () => {
   const run = spawnSync(process.execPath, [CLI, '--help'], { encoding: 'utf8' })
   assert.equal(run.status, 0)
   assert.ok(run.stdout.includes('--dry-run'), 'a flag a user cannot discover may as well not exist')
+})
+
+/* ------------------------------------------------------------------ Part Q */
+
+/**
+ * `--fix-out`: the repairs as real files a user can read and pick from.
+ *
+ * The middle ground between prose and editing someone's config. The profile is
+ * never touched — a `.patch.yml` beside `cordis.patch.yml` is inert — so a wrong
+ * pick cannot break anything.
+ */
+await check('Q1 repairs of the same code get distinct filenames', () => {
+  // This profile has three `row-config-replaced` findings. A counter scoped to
+  // ONE finding made both write the same filename, so the second silently
+  // overwrote the first while the caller still reported "2 files written".
+  const outDir = mkdtempSync(join(tmpdir(), 'fixout-test-'))
+  const make = (id) => ({
+    code: 'profile/row-config-replaced',
+    severity: 'info',
+    title: 't',
+    refs: [],
+    impact: 'i',
+    evidence: ['e'],
+    fixes: [{ kind: 'patch', label: 'L', detail: 'D', risk: 'caution', snippet: `- id: ${id}\n  config: {"a":1}` }],
+  })
+  const files = writeFixFiles(outDir, [make('row-one'), make('row-two')])
+  assert.equal(files.length, 2, 'both repairs must be reported as written')
+  assert.equal(new Set(files.map((f) => f.path)).size, 2, 'and they must be two DIFFERENT files')
+  assert.equal(readdirSync(outDir).filter((n) => n.endsWith('.patch.yml')).length, 2, 'both must exist on disk')
+  rmSync(outDir, { recursive: true, force: true })
+})
+
+await check('Q2 every written fragment is valid YAML with one item', () => {
+  const outDir = mkdtempSync(join(tmpdir(), 'fixout-test-'))
+  const finding = {
+    code: 'profile/disable-then-reinsert',
+    severity: 'warning',
+    title: 't',
+    refs: [],
+    impact: 'i',
+    evidence: ['e'],
+    fixes: [{ kind: 'patch', label: 'L', detail: 'D', risk: 'destructive', snippet: '- id: some-row\n  disabled: true' }],
+  }
+  const files = writeFixFiles(outDir, [finding])
+  assert.equal(files.length, 1)
+  const text = readFileSync(files[0].path, 'utf8')
+  // The comment header must not become YAML structure: `yaml` parses this, and
+  // if the header were malformed the whole fragment would be unusable.
+  const parsed = YAML.parse(text)
+  assert.ok(Array.isArray(parsed), 'the fragment must be a top-level array')
+  assert.equal(parsed.length, 1)
+  assert.equal(parsed[0].id, 'some-row')
+  assert.equal(parsed[0].disabled, true)
+
+  // The manifest must state each risk's consequence, so nobody pastes blind.
+  const manifest = readFileSync(join(outDir, 'README.md'), 'utf8')
+  for (const level of ['safe', 'caution', 'destructive']) {
+    assert.ok(manifest.includes(`\`${level}\``), `the manifest must explain ${level}`)
+  }
+  rmSync(outDir, { recursive: true, force: true })
+})
+
+await check('Q3 --fix-out writes files and leaves the profile alone', () => {
+  if (cliProfile === undefined) return
+  const patchFile = join(cliProfile, 'cordis.patch.yml')
+  if (!existsSync(patchFile)) return
+  const before = readFileSync(patchFile, 'utf8')
+  const outDir = mkdtempSync(join(tmpdir(), 'fixout-cli-'))
+  const run = spawnSync(process.execPath, [CLI, '--profile', cliProfile, '--fix-out', outDir], { encoding: 'utf8' })
+  assert.equal(run.status, 0, `CLI exited ${String(run.status)}: ${run.stderr}`)
+  assert.ok(readdirSync(outDir).includes('README.md'), 'a manifest must always be written')
+  assert.equal(readFileSync(patchFile, 'utf8'), before, '--fix-out must never touch the profile')
+  rmSync(outDir, { recursive: true, force: true })
 })
 
 /* ------------------------------------------------------------------ report */

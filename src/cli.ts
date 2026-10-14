@@ -21,6 +21,7 @@
  * @module dsh-conflict-doctor/cli
  */
 import { writeFileSync } from 'node:fs'
+import { writeFixFiles } from './apply.js'
 import { EXIT, SCHEMA_VERSION, exitCodeFor, parseFailOn, type FailOn } from './contract.js'
 import { detect } from './detect.js'
 import { dryRunAll, renderDryRun, type DryRunOutcome } from './dryrun.js'
@@ -38,6 +39,8 @@ interface CliOptions {
   out: string | undefined
   /** Try every applicable repair in memory and report which ones actually work. */
   dryRun?: boolean
+  /** Write each applicable repair as its own patch fragment into this directory. */
+  fixOut?: string
   help?: boolean
 }
 
@@ -84,6 +87,9 @@ function parseArgs(argv: readonly string[]): CliOptions {
       case '--dry-run':
         options.dryRun = true
         break
+      case '--fix-out':
+        options.fixOut = next()
+        break
       case '--help':
       case '-h':
         options.help = true
@@ -106,6 +112,8 @@ const HELP = `dsh-conflict-doctor — audit a DSH profile for plugin conflicts
   --fail-on <level>     none | warning | critical (default: critical)
   --dry-run             try every applicable repair in memory and report which
                         ones actually resolve their finding (writes nothing)
+  --fix-out <dir>       write each applicable repair as its own .patch.yml plus a
+                        README, for manual review (never touches the profile)
   --out, -o <file>      write the report here instead of stdout
   --help, -h            this text
 
@@ -219,6 +227,21 @@ async function main(): Promise<void> {
     ].join('\n')
     if (options.format === 'json') process.stderr.write(lines)
     else process.stdout.write(lines)
+  }
+
+  if (options.fixOut !== undefined) {
+    // Explicit, non-destructive output: real files a user can read and pick
+    // from. Nothing in the profile is touched, and a stray `.patch.yml` beside
+    // `cordis.patch.yml` is inert, so a wrong pick cannot break anything.
+    try {
+      const files = writeFixFiles(options.fixOut, report.findings)
+      console.error(`conflict-doctor: wrote ${files.length} repair file(s) to ${options.fixOut}`)
+      if (files.length === 0) console.error('conflict-doctor: none of the findings had an applicable patch fragment')
+    } catch (error) {
+      console.error(`conflict-doctor: --fix-out failed: ${error instanceof Error ? error.message : String(error)}`)
+      process.exitCode = EXIT.error
+      return
+    }
   }
 
   const code = exitCodeFor(report.summary, failOn)
