@@ -23,6 +23,7 @@ import { Context, Service } from '@deepseek-ai/cordis'
 import { closeAsar, findNode, hasAsarPath, isAsarDir, listAsarDir, openAsar, readAsarFile, readAsarText } from '../lib/asar.js'
 import { EXIT, SCHEMA_VERSION, exitCodeFor, parseFailOn } from '../lib/contract.js'
 import { clearHostCaches, findHostRoot, isSafePackageName, readHostSurface } from '../lib/hostface.js'
+import { comparableRealm, readClientHalf, realmOf } from '../lib/realm.js'
 import { collectSurface } from '../lib/surface.js'
 import { validateReport } from './check-schema.mjs'
 import { versionsComparable } from '../lib/detect.js'
@@ -1425,6 +1426,152 @@ await check('E22 a denied subpath on a closed exports map is critical', () => {
     denied[0].evidence.some((line) => line.includes('exports')),
     'the evidence must name the exports map as the reason',
   )
+})
+
+/* ------------------------------------------------------------------ Part F */
+
+/**
+ * The client realm.
+ *
+ * Grounded in the real manifest contract rather than a guess: across all 45
+ * client packages in the installed profile, `dsh.client` carries exactly
+ * `platform` and `inject`, and `inject` lists CLIENT MODULE names such as
+ * `@deepseek-ai/dsh-client-ui-sidebar-right`.
+ */
+const clientBase = () => ({
+  profilePath: '/fake',
+  layers: [],
+  inserts: [],
+  overrides: [],
+  missingPatchFiles: [],
+  unresolvedBundles: [],
+  declaredTools: {},
+  declaredServices: {},
+  declaredImports: {},
+  sourceFacts: {},
+  versionAuthority: 'archive-authoritative',
+  packages: [],
+})
+
+/** A client-half package with the given injected modules. */
+const clientPkg = (name, inject, extra = {}) => ({
+  name,
+  version: '1.0.0',
+  dir: `/fake/${name}`,
+  ranges: {},
+  halves: 'client',
+  client: { platform: 'web', inject },
+  ...extra,
+})
+
+await check('F1 a client module nobody provides is reported', () => {
+  const findings = detect({
+    profile: { ...clientBase(), packages: [clientPkg('plugin-a', ['@deepseek-ai/dsh-client-ui-nope'])] },
+    nodeVersion: process.version,
+  }).filter((f) => f.code === 'client/inject-unprovided')
+  assert.equal(findings.length, 1)
+  assert.equal(findings[0].severity, 'warning')
+  assert.ok(findings[0].refs.includes('@deepseek-ai/dsh-client-ui-nope'), 'the missing module must be named')
+})
+
+await check('F2 a client module provided by an installed package is not reported', () => {
+  const findings = detect({
+    profile: {
+      ...clientBase(),
+      packages: [
+        clientPkg('plugin-b', ['@deepseek-ai/dsh-client-ui-provider']),
+        clientPkg('@deepseek-ai/dsh-client-ui-provider', []),
+      ],
+    },
+    nodeVersion: process.version,
+  }).filter((f) => f.code === 'client/inject-unprovided')
+  assert.equal(findings.length, 0, 'a module another installed package supplies must not be called missing')
+})
+
+await check('F3 a client module shipped by the running host is not reported', () => {
+  const findings = detect({
+    profile: {
+      ...clientBase(),
+      packages: [clientPkg('plugin-c', ['@deepseek-ai/dsh-client-ui-sidebar-right'])],
+      hostBundleVersions: { '@deepseek-ai/dsh-client-ui-sidebar-right': '0.2.0-rc.2' },
+    },
+    nodeVersion: process.version,
+  }).filter((f) => f.code === 'client/inject-unprovided')
+  assert.equal(findings.length, 0, 'the running host is a provider')
+})
+
+await check('F4 a differently cased or unscoped spelling is not called missing', () => {
+  // A false "missing" sends the user chasing a module that is present, so the
+  // comparison normalises case and the @deepseek-ai/ scope.
+  const findings = detect({
+    profile: {
+      ...clientBase(),
+      packages: [clientPkg('plugin-d', ['Dsh-Client-UI-Sidebar-Right'])],
+      hostBundleVersions: { '@deepseek-ai/dsh-client-ui-sidebar-right': '0.2.0-rc.2' },
+    },
+    nodeVersion: process.version,
+  }).filter((f) => f.code === 'client/inject-unprovided')
+  assert.equal(findings.length, 0, 'spelling must not create a false positive')
+})
+
+await check('F5 a package with no dsh.client is never judged as a client half', () => {
+  const findings = detect({
+    profile: { ...clientBase(), packages: [{ name: 'plugin-e', version: '1.0.0', dir: '/fake/e', ranges: {} }] },
+    nodeVersion: process.version,
+  }).filter((f) => f.code === 'client/inject-unprovided')
+  assert.equal(findings.length, 0, 'the host half has its own detectors')
+})
+
+await check('F6 a service name shared across realms is info, never a conflict', () => {
+  // The page and the host keep separate service tables, so a shared name is
+  // legitimate. It is surfaced as `info` because the exclusion used to be
+  // silent, and a reviewer may only ever look at one side.
+  const findings = detect({
+    profile: {
+      ...clientBase(),
+      packages: [
+        clientPkg('@deepseek-ai/dsh-cordis-client-runner', []),
+        { name: '@deepseek-ai/dsh-cordis-host-runner', version: '1.0.0', dir: '/fake/h', ranges: {} },
+      ],
+      declaredServices: { timer: ['@deepseek-ai/dsh-cordis-client-runner', '@deepseek-ai/dsh-cordis-host-runner'] },
+    },
+    nodeVersion: process.version,
+  }).filter((f) => f.code === 'client/service-name-shared-with-host')
+  assert.equal(findings.length, 1)
+  assert.equal(findings[0].severity, 'info', 'a cross-realm name is not a conflict')
+  assert.ok(
+    findings[0].evidence.some((line) => line.includes('不做冲突比较')),
+    'the evidence must state that the two realms are not compared',
+  )
+})
+
+await check('F7 realmOf and comparableRealm agree with the declaration', () => {
+  const declaration = readClientHalf({ dsh: { client: { platform: 'web', inject: ['a'] } } })
+  assert.deepEqual(declaration, { platform: 'web', inject: ['a'] })
+  assert.equal(realmOf(declaration), 'client')
+  assert.equal(realmOf(undefined), 'host')
+  assert.equal(comparableRealm('host', 'host'), true)
+  assert.equal(comparableRealm('client', 'client'), true)
+  assert.equal(comparableRealm('host', 'client'), false, 'the two realms are not comparable')
+})
+
+await check('F8 a malformed dsh.client still marks the package as a client half', () => {
+  // Presence is the fact; the contents are optional detail. A bare `true` or a
+  // string must not make the package look host-side, or its names would be
+  // compared against the host registry.
+  for (const value of [true, 'web', null, {}]) {
+    const declaration = readClientHalf({ dsh: { client: value } })
+    assert.notEqual(declaration, undefined, `dsh.client = ${JSON.stringify(value)} still declares a browser half`)
+    assert.equal(realmOf(declaration), 'client')
+    assert.ok(Array.isArray(declaration?.inject), 'inject must always be a list')
+  }
+  // An object-form inject keeps its keys, in declaration order.
+  assert.deepEqual(readClientHalf({ dsh: { client: { inject: { b: 1, a: 2 } } } })?.inject, ['b', 'a'])
+  // Duplicates collapse without reordering.
+  assert.deepEqual(readClientHalf({ dsh: { client: { inject: ['x', 'x', 'y'] } } })?.inject, ['x', 'y'])
+  // No client key at all means host-side.
+  assert.equal(readClientHalf({ dsh: {} }), undefined)
+  assert.equal(readClientHalf(undefined), undefined)
 })
 
 /* ------------------------------------------------------------------ report */

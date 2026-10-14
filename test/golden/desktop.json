@@ -6,11 +6,11 @@
   "hostHostVersion": "0.2.0-rc.2",
   "diskHostVersion": "0.1.0-rc.6",
   "findings": [
+    "info client/service-name-shared-with-host x4",
     "info profile/bundle-unresolved",
     "info profile/module-under-multiple-ids",
     "info profile/peer-range-unsatisfied",
     "info profile/row-config-replaced x3",
-    "warning profile/dangling-override",
     "warning profile/host-import-unsatisfied x32",
     "warning profile/host-subpath-not-exported",
     "warning profile/peer-range-unsatisfied"

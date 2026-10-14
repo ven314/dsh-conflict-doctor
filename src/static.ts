@@ -12,6 +12,7 @@ import { join, resolve } from 'node:path'
 import { satisfies, valid, validRange } from 'semver'
 import { parse as parseYaml } from 'yaml'
 import { collectHostFacts, readHostSurface } from './hostface.js'
+import { readClientHalf, type ClientHalfDeclaration } from './realm.js'
 import { collectExportSurface, scanPackageSources, type PackageSources } from './source.js'
 import type { ExportSurface } from './surface.js'
 import type {
@@ -49,14 +50,18 @@ const jsExpressionTag = {
 }
 
 /**
- * Record the realm facts a package declares: whether it ships a browser half.
+ * Record the realm facts a package declares: whether it ships a browser half,
+ * and what that half requires.
+ *
+ * Superseded a version that only recorded a boolean-ish `'client'`. The browser
+ * half's `inject` list is what makes the silent-failure check possible on the
+ * client side, so the declaration is now carried in full.
  *
  * @param manifest - the package's parsed manifest.
- * @returns `client` when it declares `dsh.client`, else undefined.
+ * @returns the client declaration when `dsh.client` is present, else undefined.
  */
-function halvesOf(manifest: Record<string, unknown> | undefined): 'client' | undefined {
-  const dsh = manifest?.dsh as Record<string, unknown> | undefined
-  return dsh?.client !== undefined ? 'client' : undefined
+function halvesOf(manifest: Record<string, unknown> | undefined): ClientHalfDeclaration | undefined {
+  return readClientHalf(manifest)
 }
 
 /** Read and parse JSON, returning undefined instead of throwing. */
@@ -241,14 +246,14 @@ export function collectStatic(
         }
       }
       const engines = manifest.engines as Record<string, unknown> | undefined
-      const halves = halvesOf(manifest)
+      const client = halvesOf(manifest)
       packages.push({
         name,
         version: version ?? '0.0.0',
         dir,
         ranges,
         ...(typeof engines?.node === 'string' ? { enginesNode: engines.node } : {}),
-        ...(halves === undefined ? {} : { halves }),
+        ...(client === undefined ? {} : { halves: 'client' as const, client }),
       })
     }
     const dsh = manifest?.dsh as Record<string, unknown> | undefined
@@ -290,14 +295,14 @@ export function collectStatic(
           }
         }
         const engines = manifest.engines as Record<string, unknown> | undefined
-        const halves = halvesOf(manifest)
+        const client = halvesOf(manifest)
         packages.push({
           name: moduleName,
           version: typeof manifest.version === 'string' ? manifest.version : '0.0.0',
           dir,
           ranges,
           ...(typeof engines?.node === 'string' ? { enginesNode: engines.node } : {}),
-          ...(halves === undefined ? {} : { halves }),
+          ...(client === undefined ? {} : { halves: 'client' as const, client }),
         })
       }
     }

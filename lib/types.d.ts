@@ -173,8 +173,29 @@ export interface ResolvedPackage {
      * Which realm the package's plugin half lands in. `client` means it declares
      * `dsh.client` and runs in the page; comparison with Host packages is
      * meaningless for it.
+     *
+     * Absent means "no browser half declared", which in practice means host-side.
+     * `host` is never assigned explicitly: the key's presence is the signal.
      */
     readonly halves?: 'client' | 'host';
+    /**
+     * The browser half's declared contract, when `dsh.client` is present.
+     *
+     * Read from real manifests rather than assumed: across the installed profile
+     * the field only ever carries `platform` and `inject`, so those are what this
+     * model records. `inject` here lists CLIENT-SIDE MODULE names (for example
+     * `@deepseek-ai/dsh-client-ui-sidebar-right`), not service names — the page
+     * half composes by module, and a name nothing provides leaves the half
+     * silently inert, exactly like a host-side service nobody provides.
+     */
+    readonly client?: ClientHalf;
+}
+/** The `dsh.client` declaration of one package. */
+export interface ClientHalf {
+    /** Target platform string as declared, e.g. `web`. */
+    readonly platform?: string;
+    /** Client-side module names this half requires to be present. */
+    readonly inject: readonly string[];
 }
 /** One name a plugin imports from a host package, at its import site. */
 export interface ImportedSymbol {
