@@ -26,6 +26,29 @@ export interface Fix {
      * only so hand-written fixtures stay valid; the audit always sets it.
      */
     readonly risk?: RiskLevel;
+    /**
+     * Structured repair plan for programmatic consumption.
+     *
+     * When `kind === 'patch'`, this breaks down the snippet into a machine-
+     * readable change targeting one row in the profile's patch file. It is the
+     * authority for `--apply` and `--dry-run`. The `snippet` remains for human
+     * consumption; the plan is for tools.
+     */
+    readonly plan?: PatchPlan;
+}
+/** A machine-readable description of one repair to a profile patch file. */
+export interface PatchPlan {
+    /** File the change targets, relative to the profile root. Always `cordis.patch.yml`. */
+    readonly file: 'cordis.patch.yml';
+    /** The row id this change addresses. */
+    readonly rowId: string;
+    /** What the change does. */
+    readonly change: 'insert-row' | 'set-config' | 'disable-row';
+    /** The exact YAML fragment that implements the change. */
+    readonly snippet: string;
+    /** How to undo it: the backup path prefix (`<file>.bak-<timestamp>`). */
+    readonly rollback: string;
+    readonly risk: RiskLevel;
 }
 /** One diagnosed conflict, with evidence and at least one repair. */
 export interface Finding {

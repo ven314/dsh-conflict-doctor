@@ -8,7 +8,7 @@
  */
 import type { Finding, Fix, LiveSnapshot, PatchInsert, PatchOverride, Severity, StaticSnapshot } from './types.js'
 import { lt, minVersion } from 'semver'
-import { classifyRisk, findFixConflicts } from './fix.js'
+import { buildPatchPlan, classifyRisk, findFixConflicts } from './fix.js'
 import { readHostManifest } from './hostface.js'
 import { moduleAliases, moduleKey } from './realm.js'
 import { satisfiesRange } from './static.js'
@@ -1467,19 +1467,32 @@ function detectFixConflicts(findings: readonly Finding[]): Finding[] {
 }
 
 /**
- * Attach a computed risk level to every fix of one finding.
+ * Attach a computed risk level and a structured plan to every fix of one finding.
  *
  * Also asserts the invariant that a finding carries at least one fix, which the
  * schema states as `minItems: 1` — a critical conflict with no suggested repair
  * is a bug in this tool, not a fact about the profile.
  *
+ * The plan is derived from the snippet at this single choke point, so the
+ * ~23 construction sites need not (and cannot) keep a second, drift-prone
+ * copy of the structured change. A snippet that does not address one row
+ * (an `insert:` list) has no plan.
+ *
  * @param finding - a finding whose fixes may lack a risk level.
- * @returns the same finding, with every fix graded.
+ * @returns the same finding, with every fix graded and planned.
  */
 function withComputedRisk(finding: Finding): Finding {
   return {
     ...finding,
-    fixes: finding.fixes.map((fix) => ({ ...fix, risk: classifyRisk(fix.kind, fix.snippet) })),
+    fixes: finding.fixes.map((fix) => {
+      const risk = classifyRisk(fix.kind, fix.snippet)
+      const plan = buildPatchPlan(fix.snippet, risk)
+      // Two branches, not a conditional spread: with exactOptionalPropertyTypes a
+      // spread of `...(plan ?? {})` leaves the property's type as `PatchPlan | undefined`,
+      // which the target `plan?: PatchPlan` (no `undefined`) rejects.
+      if (plan === undefined) return { ...fix, risk }
+      return { ...fix, risk, plan }
+    }),
   }
 }
 

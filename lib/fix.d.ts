@@ -21,6 +21,8 @@ export type RiskLevel =
  | 'caution'
 /** Disables or removes an existing row, or runs a command. Changes what loads. */
  | 'destructive';
+/** Import the canonical PatchPlan definition from types.js to avoid duplication. */
+import type { PatchPlan } from './types.js';
 /**
  * Which risks `--apply` may take WITHOUT being asked specifically.
  *
@@ -52,20 +54,8 @@ export declare function isAutoApplicable(fix: {
     kind: 'patch' | 'command' | 'manual';
     risk?: RiskLevel;
 }): boolean;
-/** One concrete change to one row, in structured form. */
-export interface PatchPlan {
-    /** File the change targets, relative to the profile. */
-    readonly file: string;
-    /** The row this addresses, when the change is id-addressed. */
-    readonly rowId?: string;
-    /** What the change does. */
-    readonly change: 'insert-row' | 'set-config' | 'disable-row' | 'run-command' | 'manual-decision';
-    /** The exact YAML fragment, when there is one. */
-    readonly snippet?: string;
-    /** How to undo it: a backup path, or the instruction a human follows. */
-    readonly rollback: string;
-    readonly risk: RiskLevel;
-}
+/** One concrete change to one row, in structured form (canonical definition in `types.js`). */
+export type { PatchPlan } from './types.js';
 /**
  * Classify a fix from its own kind and snippet.
  *
@@ -78,6 +68,19 @@ export interface PatchPlan {
  * @returns the risk level.
  */
 export declare function classifyRisk(kind: 'patch' | 'command' | 'manual', snippet: string | undefined): RiskLevel;
+/**
+ * Build a structured repair plan from a snippet.
+ *
+ * The snippet is the authority: the row id and the change kind are read back out
+ * of it, so a plan cannot disagree with the paste-ready fragment a human reads.
+ * A snippet that addresses no row (an `insert:` list, for instance) has no plan,
+ * because there is no single row to target.
+ *
+ * @param snippet - the patch fragment.
+ * @param risk - the risk already computed for this fix.
+ * @returns the plan, or undefined when the snippet does not address one row.
+ */
+export declare function buildPatchPlan(snippet: string | undefined, risk: RiskLevel): PatchPlan | undefined;
 /**
  * Whether a fix is a manual decision rather than an applicable change.
  *

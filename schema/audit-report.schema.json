@@ -71,6 +71,20 @@
         "risk": {
           "description": "How much this repair changes, COMPUTED by the audit from `kind` and `snippet` rather than hand-labelled. `safe` adds rows and leaves existing ones alone; `caution` replaces an existing row's config, recoverable from a backup; `destructive` disables or deletes a row, or runs a command, changing what actually loads. Only `patch` fixes graded `safe` or `caution` may be applied without an explicit opt-in.",
           "enum": ["safe", "caution", "destructive"]
+        },
+        "plan": {
+          "description": "Structured repair plan for programmatic application. Present when kind is `patch`. The snippet remains for human consumption; the plan is the authority for `--apply` and `--dry-run`.",
+          "type": "object",
+          "additionalProperties": false,
+          "required": ["file", "rowId", "change", "snippet", "rollback", "risk"],
+          "properties": {
+            "file": { "const": "cordis.patch.yml" },
+            "rowId": { "type": "string", "minLength": 1 },
+            "change": { "enum": ["insert-row", "set-config", "disable-row"] },
+            "snippet": { "type": "string" },
+            "rollback": { "type": "string", "minLength": 1 },
+            "risk": { "enum": ["safe", "caution", "destructive"] }
+          }
         }
       }
     },
