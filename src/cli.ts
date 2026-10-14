@@ -11,6 +11,7 @@
  *   conflict-doctor [--profile <dir>] [--scope live|profile|all]
  *                   [--format markdown|json]
  *                   [--fail-on none|warning|critical]
+ *                   [--dry-run]
  *                   [--out <file>]
  *
  * Exit codes: see EXIT in src/contract.ts —
@@ -22,6 +23,7 @@
 import { writeFileSync } from 'node:fs'
 import { EXIT, SCHEMA_VERSION, exitCodeFor, parseFailOn, type FailOn } from './contract.js'
 import { detect } from './detect.js'
+import { dryRunAll, renderDryRun, type DryRunOutcome } from './dryrun.js'
 import { renderMarkdown } from './render.js'
 import { collectStatic } from './static.js'
 import { defaultProfilePath } from './index.js'
@@ -34,6 +36,8 @@ interface CliOptions {
   failOn: string | undefined
   profile: string | undefined
   out: string | undefined
+  /** Try every applicable repair in memory and report which ones actually work. */
+  dryRun?: boolean
   help?: boolean
 }
 
@@ -77,6 +81,9 @@ function parseArgs(argv: readonly string[]): CliOptions {
       case '-o':
         options.out = next()
         break
+      case '--dry-run':
+        options.dryRun = true
+        break
       case '--help':
       case '-h':
         options.help = true
@@ -97,6 +104,8 @@ const HELP = `dsh-conflict-doctor — audit a DSH profile for plugin conflicts
   --scope <s>           live | profile | all   (default: all)
   --format, -f <fmt>    markdown | json        (default: markdown)
   --fail-on <level>     none | warning | critical (default: critical)
+  --dry-run             try every applicable repair in memory and report which
+                        ones actually resolve their finding (writes nothing)
   --out, -o <file>      write the report here instead of stdout
   --help, -h            this text
 
@@ -179,6 +188,37 @@ async function main(): Promise<void> {
     console.error(`conflict-doctor: wrote ${options.out}`)
   } else {
     process.stdout.write(rendered)
+  }
+
+  if (options.dryRun === true) {
+    // Reported SEPARATELY from the audit, never merged into it. The JSON
+    // contract is frozen and machine-read, so mixing a simulation into it would
+    // break consumers; and a dry run is a statement about the repairs, not about
+    // the profile. For `--format json` results go to stderr so stdout stays a
+    // single parseable document.
+    let outcomes: readonly DryRunOutcome[]
+    try {
+      outcomes = dryRunAll(profilePath, report.findings, { nodeVersion: process.version })
+    } catch (error) {
+      console.error(`conflict-doctor: --dry-run failed: ${error instanceof Error ? error.message : String(error)}`)
+      process.exitCode = EXIT.error
+      return
+    }
+    const lines = [
+      '',
+      '## 修复试跑（--dry-run，未写入任何文件）',
+      '',
+      '每条可应用的修复都在**内存里**套用后重跑了审计。未解决不代表修复有错：',
+      '有些结论描述的是设计上就存在的状态（例如多层重述），其建议是让最后一层权威，而非消除结论本身。',
+      '',
+      renderDryRun(outcomes),
+      '',
+      `可应用修复 ${outcomes.length} 条 · 已解决 ${outcomes.filter((o) => o.resolved).length} 条 · ` +
+        `引入新结论 ${outcomes.filter((o) => o.introduced.length > 0).length} 条`,
+      '',
+    ].join('\n')
+    if (options.format === 'json') process.stderr.write(lines)
+    else process.stdout.write(lines)
   }
 
   const code = exitCodeFor(report.summary, failOn)

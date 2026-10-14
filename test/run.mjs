@@ -16,8 +16,10 @@
  * Run: node test/run.mjs
  */
 import assert from 'node:assert/strict'
-import { join, resolve } from 'node:path'
+import { dirname, join, resolve } from 'node:path'
+import { fileURLToPath } from 'node:url'
 import { existsSync, mkdirSync, mkdtempSync, readdirSync, readFileSync, rmSync, writeFileSync } from 'node:fs'
+import { spawnSync } from 'node:child_process'
 import { tmpdir } from 'node:os'
 import { Context, Service } from '@deepseek-ai/cordis'
 import { closeAsar, findNode, hasAsarPath, isAsarDir, listAsarDir, openAsar, readAsarFile, readAsarText } from '../lib/asar.js'
@@ -2471,6 +2473,79 @@ await check('O4 a permitted write keeps the original in a backup', () => {
 })
 
 rmSync(applyRoot, { recursive: true, force: true })
+
+/* ------------------------------------------------------------------ Part P */
+
+/**
+ * The CLI surface for everything above.
+ *
+ * Capability that no user can reach is not capability, so these checks run the
+ * real binary. The two properties that matter: `--dry-run` changes nothing on
+ * disk, and it does not contaminate the frozen JSON contract.
+ */
+const CLI = join(dirname(fileURLToPath(import.meta.url)), '..', 'lib', 'cli.js')
+const cliProfile = process.env.DSH_PROFILE_DIR ?? defaultProfilePath()
+
+await check('P1 the report shows each repair risk level', () => {
+  const report = {
+    schemaVersion: 1,
+    generatedAt: new Date().toISOString(),
+    profilePath: '/p',
+    scope: 'profile',
+    summary: { critical: 0, warning: 0, info: 1, liveEntries: 0, patchLayers: 1, scannedPackages: 1, declaredTools: 0 },
+    findings: [
+      {
+        code: 'a/b',
+        severity: 'info',
+        title: 't',
+        refs: [],
+        impact: 'i',
+        evidence: ['e'],
+        fixes: [{ kind: 'patch', label: 'L', detail: 'D', risk: 'destructive' }],
+      },
+    ],
+    notes: [],
+    versionAuthority: 'authoritative',
+  }
+  const text = renderMarkdown(report)
+  assert.ok(text.includes('[destructive]'), 'a reader must be able to see that a repair changes what loads')
+})
+
+await check('P2 --dry-run is accepted and writes nothing', () => {
+  if (cliProfile === undefined) return
+  const patchFile = join(cliProfile, 'cordis.patch.yml')
+  if (!existsSync(patchFile)) return
+  const before = readFileSync(patchFile, 'utf8')
+  const run = spawnSync(process.execPath, [CLI, '--profile', cliProfile, '--dry-run'], { encoding: 'utf8' })
+  assert.equal(run.status, 0, `CLI exited ${String(run.status)}: ${run.stderr}`)
+  assert.ok(run.stdout.includes('修复试跑'), 'the dry-run section must be printed')
+  assert.equal(readFileSync(patchFile, 'utf8'), before, 'a dry run must never touch the profile')
+})
+
+await check('P3 --dry-run keeps stdout pure when the format is json', () => {
+  if (cliProfile === undefined) return
+  const run = spawnSync(process.execPath, [CLI, '--profile', cliProfile, '--dry-run', '--format', 'json'], {
+    encoding: 'utf8',
+  })
+  assert.equal(run.status, 0, `CLI exited ${String(run.status)}: ${run.stderr}`)
+  // stdout must stay one parseable document: a pipeline reading it cannot be
+  // handed a simulation table mixed into the contract.
+  const parsed = JSON.parse(run.stdout)
+  assert.equal(parsed.schemaVersion, 1)
+  assert.equal(parsed.dryRun, undefined, 'the frozen contract must not grow a dry-run field')
+  assert.ok(run.stderr.includes('修复试跑'), 'the simulation goes to stderr instead')
+})
+
+await check('P4 an unknown flag still refuses to start', () => {
+  const run = spawnSync(process.execPath, [CLI, '--not-a-flag'], { encoding: 'utf8' })
+  assert.notEqual(run.status, 0, 'a typo must not silently mean "no gate"')
+})
+
+await check('P5 --help documents --dry-run', () => {
+  const run = spawnSync(process.execPath, [CLI, '--help'], { encoding: 'utf8' })
+  assert.equal(run.status, 0)
+  assert.ok(run.stdout.includes('--dry-run'), 'a flag a user cannot discover may as well not exist')
+})
 
 /* ------------------------------------------------------------------ report */
 

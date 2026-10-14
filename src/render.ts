@@ -23,7 +23,11 @@ function renderFinding(finding: Finding): string {
   for (const item of finding.evidence) lines.push(`  - ${item}`)
   lines.push('- 修复:')
   finding.fixes.forEach((fix, index) => {
-    lines.push(`  ${index + 1}. ${fix.label} — ${fix.detail}`)
+    // The risk level decides whether a repair can be applied automatically, so
+    // it is shown rather than left to be discovered. Without it a reader cannot
+    // tell "add a row" from "disable a plugin".
+    const risk = fix.risk === undefined ? '' : ` **[${fix.risk}]**`
+    lines.push(`  ${index + 1}. ${fix.label}${risk} — ${fix.detail}`)
     if (fix.snippet !== undefined) {
       lines.push('    ```yaml')
       for (const snippetLine of fix.snippet.split('\n')) lines.push(`    ${snippetLine}`)
