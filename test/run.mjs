@@ -2860,6 +2860,38 @@ await check('T2 the guard refuses to write outside the profile or into node_modu
   rmSync(dir, { recursive: true, force: true })
 })
 
+await check('U1 every row-addressed patch fix carries a plan that matches its snippet', () => {
+  // The plan is the machine-readable form of the snippet: it must agree with it,
+  // field by field, or a consumer applying the plan would do something the human
+  // reading the snippet would not expect.
+  const findings = detect({ profile: dirtyProfile, nodeVersion: '20.11.0' })
+  let checked = 0
+  for (const finding of findings) {
+    for (const fix of finding.fixes) {
+      if (fix.kind !== 'patch') {
+        assert.equal(fix.plan, undefined, 'only patch fixes carry a plan')
+        continue
+      }
+      if (fix.snippet === undefined) {
+        assert.equal(fix.plan, undefined, 'a snippet-less patch has no row to target, so no plan')
+        continue
+      }
+      const rowId = snippetRowId(fix.snippet)
+      if (rowId === undefined) {
+        assert.equal(fix.plan, undefined, 'an insert list addresses no single row')
+        continue
+      }
+      checked += 1
+      assert.ok(fix.plan, `${finding.code}: a row-addressed patch must carry a plan`)
+      assert.equal(fix.plan.rowId, rowId, 'the plan row must match the snippet row')
+      assert.equal(fix.plan.file, 'cordis.patch.yml')
+      assert.equal(fix.plan.snippet, fix.snippet, 'the plan snippet must be the snippet, verbatim')
+      assert.equal(fix.plan.risk, fix.risk, 'the plan risk must match the graded risk')
+    }
+  }
+  assert.ok(checked >= 2, `expected at least two row-addressed patch fixes in the fixture, got ${checked}`)
+})
+
 /* ------------------------------------------------------------------ report */
 
 console.log(`\n${checks - failures.length}/${checks} checks passed`)
