@@ -2686,6 +2686,38 @@ await check('R3 the real dry run reports advisory outcomes without a failure mar
   }
 })
 
+/* ------------------------------------------------------------------ Part S */
+
+/**
+ * Summarising a mass of same-host import misses into one root cause.
+ *
+ * This machine has 32 `host-import-unsatisfied` findings across 9 host packages.
+ * Each is individually true, but 32 repetitions of "missing two symbols" read as
+ * noise and hide the single actionable fact. The summary ADDS; it never removes
+ * or softens a per-package finding.
+ */
+await check('S1 the summary only fires on a genuine mass, and keeps every detail', () => {
+  const profilePath = process.env.DSH_PROFILE_DIR ?? defaultProfilePath()
+  if (profilePath === undefined) return
+  const findings = detect({ profile: collectStatic(profilePath, []), nodeVersion: process.version })
+  const perPackage = findings.filter((f) => f.code === 'profile/host-import-unsatisfied')
+  const summary = findings.filter((f) => f.code === 'profile/host-generation-mismatch')
+
+  if (perPackage.length < 5) {
+    assert.equal(summary.length, 0, 'a scattering of misses must not be called one root cause')
+    return
+  }
+  assert.equal(summary.length, 1, 'one mass, one summary')
+  const s = summary[0]
+  assert.equal(s.severity, 'warning')
+  // The summary must state that it does not replace the individual findings.
+  const evidence = s.evidence.join('\n')
+  assert.match(evidence, new RegExp(`全部 ${perPackage.length} 条逐包结论`), 'the count of retained detail must be stated')
+  assert.ok(perPackage.length > 0, 'per-package findings are retained, not replaced')
+  // And it must not claim to have verified more than it did.
+  assert.match(evidence, /逐字核对/, 'the verification method must be stated')
+})
+
 /* ------------------------------------------------------------------ report */
 
 console.log(`\n${checks - failures.length}/${checks} checks passed`)

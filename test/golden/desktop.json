@@ -11,6 +11,7 @@
     "info profile/module-under-multiple-ids",
     "info profile/peer-range-unsatisfied",
     "info profile/row-config-replaced x3",
+    "warning profile/host-generation-mismatch",
     "warning profile/host-import-unsatisfied x32",
     "warning profile/host-subpath-not-exported",
     "warning profile/peer-range-unsatisfied"
