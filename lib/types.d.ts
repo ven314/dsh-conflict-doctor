@@ -151,6 +151,15 @@ export interface PatchInsert {
     readonly hasConfig: boolean;
     readonly configJson: string;
     readonly layerIndex: number;
+    /**
+     * Service names this row declares it needs before it can activate.
+     *
+     * Present in real patch files (`inject: [webStartup]`). Used ONLY to build the
+     * dependency graph and find cycles, never to claim a provider is missing: the
+     * literal-pattern service scan provably misses real providers, so absence of a
+     * declaration is not absence of the service.
+     */
+    readonly inject?: readonly string[];
 }
 /** One id-addressed row override (config replacement, disable, re-insert). */
 export interface PatchOverride {

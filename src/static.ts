@@ -66,6 +66,24 @@ function halvesOf(manifest: Record<string, unknown> | undefined): ClientHalfDecl
 }
 
 /**
+ * Normalise a patch row's `inject` declaration to a name list.
+ *
+ * Real patch files write `inject: [webStartup]`. Cordis also accepts an object
+ * form, so both are read. Returns undefined when the row declares none, which is
+ * distinct from declaring an empty list.
+ *
+ * @param raw - the raw value from the parsed row.
+ * @returns the declared names, or undefined when absent.
+ */
+function injectNamesOf(raw: unknown): string[] | undefined {
+  if (Array.isArray(raw)) {
+    return raw.filter((value): value is string => typeof value === 'string' && value.length > 0)
+  }
+  if (raw !== null && typeof raw === 'object') return Object.keys(raw as Record<string, unknown>)
+  return undefined
+}
+
+/**
  * Resolve a patch row's `disabled` value.
  *
  * Three outcomes, and the difference between them matters:
@@ -140,11 +158,13 @@ function asRows(document: unknown): {
         if (row === null || typeof row !== 'object') continue
         const item = row as Record<string, unknown>
         if (typeof item.id !== 'string') continue
+        const inject = injectNamesOf(item.inject)
         inserts.push({
           rowId: item.id,
           moduleName: typeof item.name === 'string' ? item.name : '(inherited)',
           hasConfig: item.config !== undefined,
           configJson: JSON.stringify(item.config ?? null),
+          ...(inject === undefined ? {} : { inject }),
         })
       }
       continue

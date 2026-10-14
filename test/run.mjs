@@ -1997,6 +1997,103 @@ await check('I7 the real profile reports key-level evidence for every restatemen
   }
 })
 
+/* ------------------------------------------------------------------ Part J */
+
+/**
+ * Static inject-cycle detection (W4).
+ *
+ * Sound without knowing who provides what, which is exactly why it is buildable
+ * while the "unprovided inject" check is not: a cycle means every row in it
+ * waits for another, so none can activate -- true from the declarations alone.
+ */
+const graphBase = {
+  profilePath: '/fake',
+  layers: [{ index: 0, label: 'l0', kind: 'bundle', file: '/f/0.yml' }],
+  inserts: [],
+  overrides: [],
+  missingPatchFiles: [],
+  unresolvedBundles: [],
+  declaredTools: {},
+  declaredImports: {},
+  sourceFacts: {},
+  versionAuthority: 'unknown',
+  packages: [],
+}
+const graphRow = (rowId, moduleName, inject) => ({
+  rowId,
+  moduleName,
+  hasConfig: false,
+  configJson: 'null',
+  layerIndex: 0,
+  ...(inject === undefined ? {} : { inject }),
+})
+const cycleFindings = (inserts, declaredServices) =>
+  detect({ profile: { ...graphBase, inserts, declaredServices }, nodeVersion: process.version }).filter(
+    (f) => f.code === 'profile/inject-cycle',
+  )
+
+await check('J1 a two-row inject cycle is critical and names the path', () => {
+  const findings = cycleFindings([graphRow('A', 'mod-a', ['svcB']), graphRow('B', 'mod-b', ['svcA'])], {
+    svcA: ['mod-a'],
+    svcB: ['mod-b'],
+  })
+  assert.equal(findings.length, 1)
+  assert.equal(findings[0].severity, 'critical', 'a deadlock is not informational')
+  assert.match(findings[0].title, /A → B → A/, 'the cycle path must be named, not just asserted')
+})
+
+await check('J2 a transitive cycle is found', () => {
+  const findings = cycleFindings(
+    [graphRow('A', 'mod-a', ['svcB']), graphRow('B', 'mod-b', ['svcC']), graphRow('C', 'mod-c', ['svcA'])],
+    { svcA: ['mod-a'], svcB: ['mod-b'], svcC: ['mod-c'] },
+  )
+  assert.equal(findings.length, 1)
+  assert.match(findings[0].title, /A → B → C → A/)
+})
+
+await check('J3 acyclic shapes stay silent', () => {
+  // A chain is the normal case. Fan-out is what this machine's real profile
+  // actually has (two rows injecting one service), so it must never fire.
+  assert.equal(
+    cycleFindings([graphRow('A', 'mod-a', ['svcB']), graphRow('B', 'mod-b', undefined)], { svcB: ['mod-b'] }).length,
+    0,
+    'a chain is not a cycle',
+  )
+  assert.equal(
+    cycleFindings([graphRow('webserver', 'mod-w', ['webStartup']), graphRow('web-runtime', 'mod-w', ['webStartup'])], {
+      webStartup: ['mod-host'],
+    }).length,
+    0,
+    'fan-out is the real profile shape and must not be reported',
+  )
+})
+
+await check('J4 an inject with no row provider is not guessed at', () => {
+  // The provider may exist and simply not be visible to the literal-pattern
+  // scan, so no edge is created and nothing is claimed.
+  assert.equal(cycleFindings([graphRow('A', 'mod-a', ['svcX'])], {}).length, 0, 'an unknown provider is not a cycle')
+})
+
+await check('J5 the real profile has inject edges and no cycle', () => {
+  // 3 real edges exist (webserver/web-runtime -> webStartup, connection ->
+  // webRuntime) and form no cycle, so this pins both extraction and silence.
+  const profilePath = process.env.DSH_PROFILE_DIR ?? defaultProfilePath()
+  if (profilePath === undefined) return
+  let snapshot
+  try {
+    snapshot = collectStatic(profilePath, [])
+  } catch {
+    return
+  }
+  const withInject = snapshot.inserts.filter((row) => row.inject !== undefined && row.inject.length > 0)
+  assert.ok(withInject.length > 0, 'the real profile declares inject edges; extraction must find them')
+  assert.equal(
+    detect({ profile: snapshot, nodeVersion: process.version }).filter((f) => f.code === 'profile/inject-cycle').length,
+    0,
+    'the real profile has no inject cycle',
+  )
+})
+
 /* ------------------------------------------------------------------ report */
 
 console.log(`\n${checks - failures.length}/${checks} checks passed`)

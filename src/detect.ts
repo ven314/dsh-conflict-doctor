@@ -497,6 +497,104 @@ function detectRowConfigReplaced(snapshot: StaticSnapshot): Finding[] {
   return findings
 }
 
+/**
+ * A dependency cycle among `inject` declarations in the patch layers.
+ *
+ * Sound WITHOUT knowing who provides what, which is why it is buildable while
+ * the "unprovided inject" check is not. A cycle means every row in it waits for
+ * another, so none can ever activate — that follows from the declarations alone.
+ *
+ * Why not also report an inject with no visible provider: the literal-pattern
+ * service scan provably misses real providers. On this machine the web UI works,
+ * so `webStartup` IS provided, yet `@deepseek-ai/dsh-web-app` exposes no literal
+ * `super(ctx, 'name')` for the scanner to find. Reporting "nobody provides
+ * webStartup" would be three false positives on a healthy profile — and the
+ * real failure it would be aiming at is already covered by
+ * `live/pending-missing-service`, which reads the actual registry.
+ *
+ * The graph is built from row id → injected service name → the row that
+ * plausibly provides it (a row whose module declares that service). Only edges
+ * whose target is a known row participate, so the cycle is always actionable.
+ */
+function detectInjectCycle(snapshot: StaticSnapshot): Finding[] {
+  // row id → services it needs.
+  const needs = new Map<string, string[]>()
+  for (const row of snapshot.inserts) {
+    if (row.inject === undefined || row.inject.length === 0) continue
+    needs.set(row.rowId, [...(needs.get(row.rowId) ?? []), ...row.inject])
+  }
+  if (needs.size === 0) return []
+
+  // service name → rows whose module declares providing it.
+  // `declaredServices` maps service → owner package names, so invert it here.
+  const providerRows = new Map<string, string[]>()
+  for (const [service, owners] of Object.entries(snapshot.declaredServices ?? {})) {
+    for (const row of snapshot.inserts) {
+      if (!owners.includes(row.moduleName)) continue
+      const list = providerRows.get(service) ?? []
+      if (!list.includes(row.rowId)) list.push(row.rowId)
+      providerRows.set(service, list)
+    }
+  }
+
+  // Edges: row → the rows that provide what it injects.
+  const edges = new Map<string, string[]>()
+  for (const [rowId, services] of needs) {
+    const targets: string[] = []
+    for (const service of services) {
+      for (const provider of providerRows.get(service) ?? []) {
+        if (provider !== rowId) targets.push(provider)
+      }
+    }
+    if (targets.length > 0) edges.set(rowId, targets)
+  }
+  if (edges.size === 0) return []
+
+  // Depth-first search with an explicit stack path to recover the cycle itself,
+  // so the finding can name the rows rather than just assert one exists.
+  const findings: Finding[] = []
+  const state = new Map<string, 'visiting' | 'done'>()
+  const path: string[] = []
+
+  const visit = (node: string): void => {
+    const current = state.get(node)
+    if (current === 'done') return
+    if (current === 'visiting') {
+      const start = path.indexOf(node)
+      const cycle = [...path.slice(start), node]
+      findings.push({
+        code: 'profile/inject-cycle',
+        severity: 'critical',
+        title: `patch 层的 inject 声明构成环：${cycle.join(' → ')}`,
+        refs: cycle,
+        impact:
+          '环上的每一行都在等另一行先激活，因此整条链永远无法激活。这类故障不报错、不打日志，表现是这几行的功能整体不出现。',
+        evidence: [
+          ...cycle.slice(0, -1).map((rowId) => `${rowId} 需要：${(needs.get(rowId) ?? []).join(', ')}`),
+          `环：${cycle.join(' → ')}`,
+          '判定依据：只依据 patch 层声明的 inject 边，不依赖「谁提供什么」——因此结论不涉及提供方识别的不确定性。',
+        ],
+        fixes: [
+          {
+            kind: 'manual',
+            label: '打断环：让其中一行不再需要环上的另一行',
+            detail: '通常是把某一行的 inject 改成由外部先提供，或把两行的职责合并到一行。',
+          },
+        ],
+      })
+      return
+    }
+    state.set(node, 'visiting')
+    path.push(node)
+    for (const next of edges.get(node) ?? []) visit(next)
+    path.pop()
+    state.set(node, 'done')
+  }
+
+  for (const node of edges.keys()) visit(node)
+  return findings
+}
+
 /** An override that addresses a row no layer ever inserts. */
 function detectDanglingOverride(snapshot: StaticSnapshot): Finding[] {
   const inserted = new Set(snapshot.inserts.map((row) => row.rowId))
@@ -1237,6 +1335,7 @@ export function detect(input: {
       ...detectHostSubpathNotExported(input.profile),
       ...detectClientInjectUnprovided(input.profile),
       ...detectCrossRealmServiceName(input.profile),
+      ...detectInjectCycle(input.profile),
       ...detectEngineUnsatisfied(input.profile, input.nodeVersion),
     )
   }
