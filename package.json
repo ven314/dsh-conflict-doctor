@@ -31,7 +31,7 @@
   "scripts": {
     "build": "tsc -p tsconfig.json",
     "test": "node test/run.mjs",
-    "check": "node test/check-metadata.mjs && node test/check-version.mjs && node test/check-tarball.mjs && node test/check-entry.mjs && node test/check-schema.mjs && node test/check-golden.mjs && node test/check-perf.mjs",
+    "check": "node test/check-metadata.mjs && node test/check-version.mjs && node test/check-tarball.mjs && node test/check-entry.mjs && node test/check-schema.mjs && node test/check-golden.mjs && node test/check-perf.mjs && node test/check-memory.mjs",
     "check:metadata": "node test/check-metadata.mjs",
     "check:version": "node test/check-version.mjs",
     "check:tarball": "node test/check-tarball.mjs",

@@ -48,6 +48,17 @@ function budget(label, ms, limit) {
   console.log(`  ${ok ? 'OK  ' : 'FAIL'} ${label}: ${ms.toFixed(0)}ms (budget ${limit}ms)`)
 }
 
+// Same idea for memory: a scan that quietly doubles its peak is the same kind of
+// regression as one that doubles its time, just slower to notice. Measured on a
+// real 138-package profile the audit peaks at ~103 MB RSS (42 MB heap; the rest
+// is native buffers from asar text reads), so the cap is 120 MB — a budget, not
+// a measurement.
+function budgetMb(label, mb, limitMb) {
+  const ok = mb <= limitMb
+  results.push({ label, ok, ms: mb, limit: limitMb })
+  console.log(`  ${ok ? 'OK  ' : 'FAIL'} ${label}: ${mb.toFixed(1)}MB (budget ${limitMb}MB)`)
+}
+
 /* ------------------------------------------------ one archive decode + scan */
 
 const facts = time(() => collectHostFacts())
