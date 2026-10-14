@@ -23,6 +23,7 @@ import { join } from 'node:path'
 import type { Context } from '@deepseek-ai/cordis'
 import { defineTool } from '@deepseek-ai/dsh-tools'
 import { SCHEMA_VERSION } from './contract.js'
+import { attributionNote } from './attribution.js'
 import { detect } from './detect.js'
 import { collectLive } from './live.js'
 import { renderHeadline, renderMarkdown } from './render.js'
@@ -123,6 +124,15 @@ export async function runAudit(ctx: Context, options: AuditOptions = {}): Promis
         notes.push(profileSnapshot.versionAuthorityReason)
       }
     }
+  }
+
+  // Attribution coverage, stated as a fact rather than a blanket caveat. The
+  // README used to say only that ownership "cannot be attributed with
+  // certainty"; a reader could not tell a settled answer from a guess. The note
+  // is produced by one shared function so every entry point says the same thing.
+  if (profileSnapshot !== undefined) {
+    const note = attributionNote(profileSnapshot)
+    if (note !== undefined) notes.push(note)
   }
 
   const findings = detect({

@@ -4,6 +4,7 @@
  */
 import { writeFileSync } from 'node:fs'
 import { fileURLToPath } from 'node:url'
+import { attributionNote } from '../lib/attribution.js'
 import { collectStatic, defaultProfilePath, detect, renderMarkdown } from '../lib/index.js'
 
 const profilePath = defaultProfilePath()
@@ -38,6 +39,9 @@ const report = {
             `来源：${snapshot.hostOrigin}），而不是磁盘上的 ${snapshot.hostVersion ?? '未解析到版本'}。`,
         ]),
     ...snapshot.notes,
+    // Shared with runAudit and the CLI, so this report cannot drift into
+    // omitting that some name could not be attributed.
+    ...(attributionNote(snapshot) === undefined ? [] : [attributionNote(snapshot)]),
   ],
 }
 

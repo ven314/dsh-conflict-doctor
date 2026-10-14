@@ -24,6 +24,7 @@ import { closeAsar, findNode, hasAsarPath, isAsarDir, listAsarDir, openAsar, rea
 import { EXIT, SCHEMA_VERSION, exitCodeFor, parseFailOn } from '../lib/contract.js'
 import { clearHostCaches, findHostRoot, isSafePackageName, readHostSurface } from '../lib/hostface.js'
 import { comparableRealm, readClientHalf, realmOf } from '../lib/realm.js'
+import { CONFIDENCE_LABEL, attribute, attributeAll, confidenceCounts } from '../lib/attribution.js'
 import { collectSurface } from '../lib/surface.js'
 import { validateReport } from './check-schema.mjs'
 import { versionsComparable } from '../lib/detect.js'
@@ -1614,6 +1615,110 @@ await check('F9 the report groups findings by realm', () => {
   const profileAt = markdown.indexOf('磁盘组合')
   assert.ok(liveAt !== -1 && profileAt !== -1 && liveAt < profileAt, 'live findings come before disk composition')
   assert.ok(markdown.includes('1 critical'), 'each section must state its own severity counts')
+})
+
+/* ------------------------------------------------------------------ Part G */
+
+/**
+ * Attribution confidence.
+ *
+ * The README has always admitted that tool-id ownership cannot be attributed
+ * with certainty. That is honest but not actionable — a reader cannot tell a
+ * certain answer from a guess. These checks pin the graded replacement.
+ */
+const attrBase = () => ({
+  profilePath: '/fake',
+  layers: [],
+  inserts: [],
+  overrides: [],
+  missingPatchFiles: [],
+  unresolvedBundles: [],
+  declaredTools: {},
+  declaredServices: {},
+  declaredImports: {},
+  sourceFacts: {},
+})
+const hostPkg = (name) => ({ name, version: '1.0.0', dir: `/fake/${name}`, ranges: {} })
+const clientPkgOf = (name) => ({ ...hostPkg(name), halves: 'client', client: { platform: 'web', inject: [] } })
+
+await check('G1 one declarer is certain', () => {
+  const result = attribute({ ...attrBase(), packages: [hostPkg('p1')], declaredTools: { foo: ['p1'] } }, 'tool', 'foo')
+  assert.equal(result.confidence, 'certain')
+  assert.equal(result.candidates.length, 1)
+  assert.ok(result.reason.length > 0, 'a grade must come with its reason')
+})
+
+await check('G2 declarers in different realms are probable, not a conflict', () => {
+  // The page and the host keep separate registries, so the same name in each is
+  // the normal shape of "both halves expose this capability".
+  const result = attribute(
+    { ...attrBase(), packages: [hostPkg('p1'), clientPkgOf('p2')], declaredServices: { bar: ['p1', 'p2'] } },
+    'service',
+    'bar',
+  )
+  assert.equal(result.confidence, 'probable')
+  assert.ok(result.reason.includes('realm'), 'the reason must name the realm distinction')
+})
+
+await check('G3 declarers in the same realm are ambiguous and must ask for a human', () => {
+  // This is the case the README's caveat was about. Saying so explicitly is the
+  // whole point: previously this looked the same as a settled answer.
+  const result = attribute(
+    { ...attrBase(), packages: [hostPkg('p1'), hostPkg('p2')], declaredTools: { baz: ['p1', 'p2'] } },
+    'tool',
+    'baz',
+  )
+  assert.equal(result.confidence, 'ambiguous')
+  assert.ok(result.reason.includes('人工'), 'an ambiguous result must say a human is needed')
+  assert.equal(result.candidates.length, 2)
+})
+
+await check('G4 nothing declaring a name is unknown, never a guess', () => {
+  const result = attribute({ ...attrBase(), packages: [hostPkg('p1')] }, 'tool', 'ghost')
+  assert.equal(result.confidence, 'unknown')
+  assert.equal(result.candidates.length, 0)
+  assert.ok(result.reason.includes('动态') || result.reason.includes('运行期'), 'the reason must explain the blind spot')
+})
+
+await check('G5 the weakest attributions are listed first', () => {
+  // Ordering is load-bearing: burying "needs a human" under 79 settled answers
+  // would make the grade decorative.
+  const all = attributeAll({
+    ...attrBase(),
+    packages: [hostPkg('p1'), hostPkg('p2'), clientPkgOf('p3')],
+    declaredTools: { settled: ['p1'], contested: ['p1', 'p2'], ghost: [] },
+    declaredServices: { shared: ['p1', 'p3'] },
+  })
+  assert.deepEqual(
+    all.map((entry) => `${entry.name}=${entry.confidence}`),
+    ['contested=ambiguous', 'ghost=unknown', 'shared=probable', 'settled=certain'],
+  )
+  assert.deepEqual(confidenceCounts(all), { certain: 1, probable: 1, ambiguous: 1, unknown: 1 })
+})
+
+await check('G6 every confidence grade has a human label', () => {
+  for (const grade of ['certain', 'probable', 'ambiguous', 'unknown']) {
+    assert.ok(typeof CONFIDENCE_LABEL[grade] === 'string' && CONFIDENCE_LABEL[grade].length > 0, `${grade} needs a label`)
+  }
+})
+
+await check('G7 the real profile attributes without inventing ambiguity', () => {
+  // On a healthy profile every name should be settled or explained by realm.
+  // An `unknown` here would mean the scan missed a declaration it should see.
+  const profilePath = process.env.DSH_PROFILE_DIR ?? defaultProfilePath()
+  if (profilePath === undefined) return
+  let snapshot
+  try {
+    snapshot = collectStatic(profilePath, [])
+  } catch {
+    return
+  }
+  const all = attributeAll(snapshot)
+  if (all.length === 0) return
+  const counts = confidenceCounts(all)
+  assert.equal(counts.ambiguous, 0, `a healthy profile must not have same-realm ambiguity; got ${JSON.stringify(counts)}`)
+  assert.equal(counts.unknown, 0, 'every declared name should have been seen by the scan')
+  assert.ok(counts.certain > 0, 'the scan should settle at least one name')
 })
 
 /* ------------------------------------------------------------------ report */
