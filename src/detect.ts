@@ -8,7 +8,7 @@
  */
 import type { Finding, Fix, LiveSnapshot, PatchInsert, PatchOverride, Severity, StaticSnapshot } from './types.js'
 import { lt, minVersion } from 'semver'
-import { classifyRisk } from './fix.js'
+import { classifyRisk, findFixConflicts } from './fix.js'
 import { readHostManifest } from './hostface.js'
 import { moduleAliases, moduleKey } from './realm.js'
 import { satisfiesRange } from './static.js'
@@ -1343,10 +1343,47 @@ export function detect(input: {
   if (input.live !== undefined && input.profile !== undefined) {
     findings.push(...detectOutboundToolCollision(input.live, input.profile))
   }
+  // Fix conflicts are computed over the findings already collected, so this runs
+  // last: it is a statement about the repairs, not about the profile.
+  findings.push(...detectFixConflicts(findings))
   // Risk is computed here, at the single exit, rather than annotated at each of
   // the ~29 fix construction sites: the snippet is the authority, and a label
   // written by hand drifts from it the first time someone edits the YAML.
   return dedupe(sortFindings(findings)).map(withComputedRisk)
+}
+
+/**
+ * Two fixes that would change one row in incompatible ways.
+ *
+ * Reported because applying both silently loses one, and which one is lost
+ * depends on the order they happen to be applied in. The audit cannot know which
+ * the user wants, so it names the collision rather than picking.
+ *
+ * @param findings - the findings already collected in this audit.
+ * @returns one finding per conflicting row.
+ */
+function detectFixConflicts(findings: readonly Finding[]): Finding[] {
+  return findFixConflicts(findings).map((conflict) => ({
+    code: 'fix/mutually-exclusive',
+    severity: 'warning',
+    title: `row“${conflict.rowId}” 有 ${conflict.fixes.length} 条互相冲突的修复建议`,
+    refs: [conflict.rowId, ...conflict.fixes.map((entry) => entry.code)],
+    impact:
+      '这些修复都要改同一行、方向却不一致。一起应用会互相覆盖，而留下哪一条取决于应用顺序——' +
+      '也就是说结果不确定。需要你来决定哪一条才是想要的。',
+    evidence: [
+      ...conflict.fixes.map((entry) => `${entry.code}：${entry.change}（风险 ${entry.risk}）`),
+      `冲突行：${conflict.rowId}`,
+      '判定依据：两条建议都按 id 指向同一行，且一条是停用、另一条是改 config。',
+    ],
+    fixes: [
+      {
+        kind: 'manual',
+        label: '先决定这一行最终该是什么样，再只应用其中一条',
+        detail: '两条建议各自都成立，但它们的组合不成立；逐条应用并每次重跑审计可以避免覆盖。',
+      },
+    ],
+  }))
 }
 
 /**

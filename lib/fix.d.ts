@@ -92,3 +92,58 @@ export declare function isManual(kind: 'patch' | 'command' | 'manual'): boolean;
  * does not tell a reader whether their tools will stop loading.
  */
 export declare const RISK_LABEL: Readonly<Record<RiskLevel, string>>;
+/** One row that two or more fixes would change in incompatible ways. */
+export interface FixConflict {
+    /** The row both fixes address. */
+    readonly rowId: string;
+    /** The fixes involved, as `code` plus what each would do. */
+    readonly fixes: ReadonlyArray<{
+        readonly code: string;
+        readonly change: PatchChange;
+        readonly risk: RiskLevel;
+    }>;
+}
+/** What a fix does to a row, derived from its snippet. */
+export type PatchChange = 'insert-row' | 'set-config' | 'disable-row' | 'unknown';
+/**
+ * Read the row a patch snippet addresses.
+ *
+ * The snippet is YAML text, so this reads the `- id:` line rather than parsing
+ * the whole document: the audit never evaluates or rewrites user YAML outside an
+ * explicit apply, and an approximate read is enough to detect that two fixes
+ * point at the same row.
+ *
+ * @param snippet - a paste-ready patch fragment.
+ * @returns the row id it addresses, or undefined when it addresses none.
+ */
+export declare function snippetRowId(snippet: string | undefined): string | undefined;
+/**
+ * What one fix does, from its kind and snippet.
+ *
+ * @param fix - the fix to classify.
+ * @returns the change it makes.
+ */
+export declare function classifyChange(fix: {
+    kind: 'patch' | 'command' | 'manual';
+    snippet?: string;
+}): PatchChange;
+/**
+ * Find rows that two or more fixes would change incompatibly.
+ *
+ * Two fixes touching one row is not automatically a conflict: two findings may
+ * legitimately both add rows to the same `insert` list. It becomes a conflict
+ * when their effects disagree — one disabling a row while another reconfigures
+ * it, for instance. Applying both silently loses one of them, and which one is
+ * lost depends on ordering, so the audit says so instead of guessing.
+ *
+ * @param findings - findings whose fixes have already been grouped.
+ * @returns one entry per conflicting row, sorted by row id.
+ */
+export declare function findFixConflicts(findings: ReadonlyArray<{
+    code: string;
+    fixes: ReadonlyArray<{
+        kind: 'patch' | 'command' | 'manual';
+        snippet?: string;
+        risk?: RiskLevel;
+    }>;
+}>): FixConflict[];

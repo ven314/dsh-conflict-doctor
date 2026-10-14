@@ -28,7 +28,7 @@ import { CONFIDENCE_LABEL, attribute, attributeAll, confidenceCounts } from '../
 import { collectSurface } from '../lib/surface.js'
 import { collectLive } from '../lib/live.js'
 import { evaluateCondition, evaluateExpression } from '../lib/expr.js'
-import { RISK_LABEL, classifyRisk, isAutoApplicable } from '../lib/fix.js'
+import { RISK_LABEL, classifyRisk, findFixConflicts, isAutoApplicable, snippetRowId } from '../lib/fix.js'
 import { validateReport } from './check-schema.mjs'
 import { versionsComparable } from '../lib/detect.js'
 import {
@@ -2156,6 +2156,84 @@ await check('K5 every risk level has a consequence-naming label', () => {
   for (const level of ['safe', 'caution', 'destructive']) {
     assert.ok(typeof RISK_LABEL[level] === 'string' && RISK_LABEL[level].length > 0, `${level} needs a label`)
   }
+})
+
+/* ------------------------------------------------------------------ Part L */
+
+/**
+ * Mutually exclusive repairs.
+ *
+ * Reports 0 on the real profile, so the firing path needs fixtures. Applying two
+ * contradictory fixes to one row silently loses one of them, and which one
+ * survives depends on apply order -- the audit cannot know which the user wants.
+ */
+const fixOf = (kind, snippet) => ({ kind, label: 'l', detail: 'd', ...(snippet === undefined ? {} : { snippet }) })
+
+await check('L1 a disable and a config change on one row conflict', () => {
+  const conflicts = findFixConflicts([
+    { code: 'profile/disable-then-reinsert', fixes: [fixOf('patch', '- id: shared-row\n  disabled: true')] },
+    { code: 'profile/row-config-replaced', fixes: [fixOf('patch', '- id: shared-row\n  config: {"a":1}')] },
+  ])
+  assert.equal(conflicts.length, 1)
+  assert.equal(conflicts[0].rowId, 'shared-row')
+  assert.equal(conflicts[0].fixes.length, 2)
+})
+
+await check('L2 two fixes doing the same thing are redundant, not conflicting', () => {
+  // Two findings may both advise reconfiguring one row; either achieves it, so
+  // calling that a conflict would be noise.
+  const sameChange = findFixConflicts([
+    { code: 'a', fixes: [fixOf('patch', '- id: row\n  config: {"a":1}')] },
+    { code: 'b', fixes: [fixOf('patch', '- id: row\n  config: {"a":2}')] },
+  ])
+  assert.equal(sameChange.length, 0, 'two config rewrites on one row are not contradictory')
+
+  // Two disables likewise.
+  const bothDisable = findFixConflicts([
+    { code: 'a', fixes: [fixOf('patch', '- id: row\n  disabled: true')] },
+    { code: 'b', fixes: [fixOf('patch', '- id: row\n  disabled: true')] },
+  ])
+  assert.equal(bothDisable.length, 0)
+})
+
+await check('L3 fixes on different rows never conflict', () => {
+  const conflicts = findFixConflicts([
+    { code: 'a', fixes: [fixOf('patch', '- id: row-1\n  disabled: true')] },
+    { code: 'b', fixes: [fixOf('patch', '- id: row-2\n  config: {}')] },
+  ])
+  assert.equal(conflicts.length, 0)
+})
+
+await check('L4 fixes with no row target are ignored', () => {
+  // A manual decision and an insert list address no existing row, so they cannot
+  // collide with anything.
+  const conflicts = findFixConflicts([
+    { code: 'a', fixes: [fixOf('manual', undefined)] },
+    { code: 'b', fixes: [fixOf('patch', '- insert:\n    - id: new-row\n      name: x')] },
+    { code: 'c', fixes: [fixOf('patch', '- id: real-row\n  disabled: true')] },
+  ])
+  assert.equal(conflicts.length, 0)
+  assert.equal(snippetRowId(undefined), undefined)
+  assert.equal(snippetRowId('- insert:\n    - id: new-row'), 'new-row', 'an insert target is still read')
+})
+
+await check('L5 the real profile has no conflicting repairs', () => {
+  // Combined with L1 this pins both directions: the detector can fire, and it
+  // stays silent on a healthy profile.
+  const profilePath = process.env.DSH_PROFILE_DIR ?? defaultProfilePath()
+  if (profilePath === undefined) return
+  let snapshot
+  try {
+    snapshot = collectStatic(profilePath, [])
+  } catch {
+    return
+  }
+  const findings = detect({ profile: snapshot, nodeVersion: process.version })
+  assert.equal(
+    findings.filter((f) => f.code === 'fix/mutually-exclusive').length,
+    0,
+    'the real profile must not report conflicting repairs',
+  )
 })
 
 /* ------------------------------------------------------------------ report */
