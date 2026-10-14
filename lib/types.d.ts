@@ -48,6 +48,15 @@ export interface AuditSummary {
 }
 /** The complete result of one audit. */
 export interface AuditReport {
+    /**
+     * Version of the JSON contract this report conforms to.
+     *
+     * Present so a consumer can DETECT a breaking change instead of misreading
+     * one: `schema/audit-report.schema.json` is the authoritative shape, and this
+     * number bumps only when an existing field changes meaning. New fields are
+     * additive and do not bump it.
+     */
+    readonly schemaVersion: number;
     readonly generatedAt: string;
     /** Profile directory the audit read, or `(running profile)`. */
     readonly profilePath: string;
@@ -56,6 +65,8 @@ export interface AuditReport {
     readonly findings: readonly Finding[];
     /** Non-fatal coverage gaps (missing files, unreadable packages). */
     readonly notes: readonly string[];
+    /** Whether the version baseline describes the running host. */
+    readonly versionAuthority?: VersionAuthority;
 }
 /** Which halves of the audit to run. */
 export type AuditScope = 'live' | 'profile' | 'all';

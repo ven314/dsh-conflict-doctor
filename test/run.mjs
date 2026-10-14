@@ -21,8 +21,10 @@ import { mkdtempSync, rmSync, writeFileSync } from 'node:fs'
 import { tmpdir } from 'node:os'
 import { Context, Service } from '@deepseek-ai/cordis'
 import { closeAsar, findNode, hasAsarPath, isAsarDir, listAsarDir, openAsar, readAsarFile, readAsarText } from '../lib/asar.js'
+import { EXIT, SCHEMA_VERSION, exitCodeFor, parseFailOn } from '../lib/contract.js'
 import { clearHostCaches, findHostRoot, isSafePackageName, readHostSurface } from '../lib/hostface.js'
 import { collectSurface } from '../lib/surface.js'
+import { validateReport } from './check-schema.mjs'
 import { versionsComparable } from '../lib/detect.js'
 import {
   collectStatic,
@@ -1267,6 +1269,65 @@ await check('E18 cross-generation declarations are aggregated, not repeated', ()
     false,
     'a host-shipped package must not be compared against its own host',
   )
+})
+
+await check('E19 the report contract rejects malformed shapes', () => {
+  // A validator that only ever says "ok" is decoration. Each case below is a
+  // shape a consumer must never be handed without warning.
+  const good = {
+    schemaVersion: SCHEMA_VERSION,
+    generatedAt: new Date().toISOString(),
+    profilePath: '/tmp/profile',
+    scope: 'profile',
+    summary: { critical: 0, warning: 1, info: 0, liveEntries: 0, patchLayers: 3, scannedPackages: 10, declaredTools: 4 },
+    findings: [
+      {
+        code: 'profile/row-config-replaced',
+        severity: 'info',
+        title: 't',
+        refs: ['a'],
+        impact: 'i',
+        evidence: ['e'],
+        fixes: [{ kind: 'manual', label: 'l', detail: 'd' }],
+      },
+    ],
+    notes: [],
+  }
+  assert.deepEqual(validateReport(good), [], 'a well-formed report must validate')
+
+  const rejected = [
+    ['missing schemaVersion', (({ schemaVersion, ...rest }) => rest)(good)],
+    ['unknown top-level property', { ...good, bogus: 1 }],
+    ['bad scope', { ...good, scope: 'everything' }],
+    ['negative count', { ...good, summary: { ...good.summary, warning: -1 } }],
+    ['findings not an array', { ...good, findings: {} }],
+    ['finding without evidence', { ...good, findings: [{ ...good.findings[0], evidence: undefined }] }],
+    ['empty evidence', { ...good, findings: [{ ...good.findings[0], evidence: [] }] }],
+    ['empty fixes', { ...good, findings: [{ ...good.findings[0], fixes: [] }] }],
+    ['bad severity', { ...good, findings: [{ ...good.findings[0], severity: 'urgent' }] }],
+    ['bad fix kind', { ...good, findings: [{ ...good.findings[0], fixes: [{ kind: 'magic', label: 'l', detail: 'd' }] }] }],
+    ['code violating the realm prefix', { ...good, findings: [{ ...good.findings[0], code: 'whatever' }] }],
+    ['non-ISO timestamp', { ...good, generatedAt: 'yesterday' }],
+    ['extra property inside a finding', { ...good, findings: [{ ...good.findings[0], extra: true }] }],
+  ]
+  for (const [label, value] of rejected) {
+    assert.ok(validateReport(value).length > 0, `the contract must reject: ${label}`)
+  }
+})
+
+await check('E20 exit codes follow the --fail-on threshold', () => {
+  // CI gates on these, so they are part of the contract, not an implementation
+  // detail. A typo must refuse to start rather than silently disable the gate.
+  assert.equal(exitCodeFor({ critical: 0, warning: 0 }, 'critical'), EXIT.ok)
+  assert.equal(exitCodeFor({ critical: 1, warning: 9 }, 'critical'), EXIT.critical)
+  assert.equal(exitCodeFor({ critical: 1, warning: 9 }, 'warning'), EXIT.critical, 'critical outranks warning')
+  assert.equal(exitCodeFor({ critical: 0, warning: 1 }, 'critical'), EXIT.ok, 'warnings do not fail a critical gate')
+  assert.equal(exitCodeFor({ critical: 0, warning: 1 }, 'warning'), EXIT.warning)
+  assert.equal(exitCodeFor({ critical: 5, warning: 5 }, 'none'), EXIT.ok, 'none never fails on findings')
+
+  assert.equal(parseFailOn(undefined), 'critical')
+  assert.equal(parseFailOn('none'), 'none')
+  assert.throws(() => parseFailOn('warn'), /--fail-on/)
 })
 
 /* ------------------------------------------------------------------ report */

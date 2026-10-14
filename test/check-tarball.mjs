@@ -23,10 +23,24 @@ import { dirname, join } from 'node:path'
 import { fileURLToPath } from 'node:url'
 
 const ROOT = join(dirname(fileURLToPath(import.meta.url)), '..')
-const MAX_FILES = Number(process.argv[2] ?? 30)
+// Raised from 30 to 40 when the frozen JSON contract (schema/) became a shipped
+// deliverable: consumers validate against it, so it cannot live only in the
+// repo. The cap still catches an accidental leak of the source tree.
+const MAX_FILES = Number(process.argv[2] ?? 40)
 
 /** Files without which an installed copy cannot be loaded or recognised. */
-const REQUIRED = ['package.json', 'cordis.patch.yml', 'lib/index.js', 'README.md', 'LICENSE']
+const REQUIRED = [
+  'package.json',
+  'cordis.patch.yml',
+  'lib/index.js',
+  // The repo declares `bin`, so a tarball without the CLI is broken on install.
+  'lib/cli.js',
+  // Consumers validate against the frozen contract; it is a deliverable, not
+  // repo-only documentation.
+  'schema/audit-report.schema.json',
+  'README.md',
+  'LICENSE',
+]
 
 /** Directories that must never appear in a published tarball. */
 const FORBIDDEN_PREFIXES = ['src/', 'test/', 'node_modules/', '.github/']

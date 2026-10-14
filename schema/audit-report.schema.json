@@ -1,0 +1,106 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://github.com/ven314/dsh-conflict-doctor/schema/audit-report.schema.json",
+  "title": "dsh-conflict-doctor audit report",
+  "description": "The JSON contract of one conflict audit. Callers parse this with `format: \"json\"`; the markdown report is a rendering of the same data. Fields are additive-only within a major version: a consumer may ignore unknown properties, but an existing property will not change meaning without a major bump.",
+  "type": "object",
+  "additionalProperties": false,
+  "required": ["schemaVersion", "generatedAt", "profilePath", "scope", "summary", "findings", "notes"],
+  "properties": {
+    "schemaVersion": {
+      "description": "Version of THIS contract. Incremented on any breaking change; additive changes do not bump it.",
+      "type": "integer",
+      "minimum": 1
+    },
+    "generatedAt": {
+      "description": "ISO-8601 timestamp of the audit.",
+      "type": "string",
+      "format": "date-time"
+    },
+    "profilePath": {
+      "description": "Profile directory that was read, or `(running profile)` for a live-only audit.",
+      "type": "string",
+      "minLength": 1
+    },
+    "scope": {
+      "description": "Which halves ran.",
+      "enum": ["live", "profile", "all"]
+    },
+    "summary": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["critical", "warning", "info", "liveEntries", "patchLayers", "scannedPackages", "declaredTools"],
+      "properties": {
+        "critical": { "type": "integer", "minimum": 0 },
+        "warning": { "type": "integer", "minimum": 0 },
+        "info": { "type": "integer", "minimum": 0 },
+        "liveEntries": { "description": "Loader rows examined (0 for a profile-only audit).", "type": "integer", "minimum": 0 },
+        "patchLayers": { "description": "Patch layers examined (0 for a live-only audit).", "type": "integer", "minimum": 0 },
+        "scannedPackages": { "type": "integer", "minimum": 0 },
+        "declaredTools": { "type": "integer", "minimum": 0 }
+      }
+    },
+    "findings": {
+      "description": "Every diagnosed conflict, ordered by severity then code then first ref, so the output is stable across runs.",
+      "type": "array",
+      "items": { "$ref": "#/$defs/finding" }
+    },
+    "notes": {
+      "description": "Non-fatal coverage gaps and the reason any check was withheld. A consumer must not read an empty finding list as 'all clear' when these explain otherwise.",
+      "type": "array",
+      "items": { "type": "string" }
+    },
+    "versionAuthority": {
+      "description": "Whether the version baseline describes the RUNNING host.",
+      "enum": ["authoritative", "archive-authoritative", "stale-disk", "unknown"]
+    }
+  },
+  "$defs": {
+    "fix": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["kind", "label", "detail"],
+      "properties": {
+        "kind": {
+          "description": "`patch` = paste into cordis.patch.yml; `command` = run in the profile; `manual` = a decision only the user can make.",
+          "enum": ["patch", "command", "manual"]
+        },
+        "label": { "type": "string", "minLength": 1 },
+        "detail": { "type": "string", "minLength": 1 },
+        "snippet": { "description": "Ready-to-paste patch fragment, for kind `patch`.", "type": "string" }
+      }
+    },
+    "finding": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["code", "severity", "title", "refs", "impact", "evidence", "fixes"],
+      "properties": {
+        "code": {
+          "description": "Stable machine code, `realm/kind`, e.g. `live/pending-missing-service`.",
+          "type": "string",
+          "pattern": "^(live|profile|client|fix)/[a-z0-9-]+$"
+        },
+        "severity": { "enum": ["critical", "warning", "info"] },
+        "title": { "type": "string", "minLength": 1 },
+        "refs": {
+          "description": "Entry ids, row ids, packages, or tool names this finding is about.",
+          "type": "array",
+          "items": { "type": "string" }
+        },
+        "impact": { "description": "What actually breaks, in user terms.", "type": "string", "minLength": 1 },
+        "evidence": {
+          "description": "The facts that prove the finding. Never a guess; a finding whose evidence cannot be reproduced should be treated as unproven.",
+          "type": "array",
+          "minItems": 1,
+          "items": { "type": "string" }
+        },
+        "fixes": {
+          "description": "At least one repair. A critical finding with no actionable repair is a bug in this tool.",
+          "type": "array",
+          "minItems": 1,
+          "items": { "$ref": "#/$defs/fix" }
+        }
+      }
+    }
+  }
+}

@@ -63,6 +63,9 @@ jobs:
       - name: version gate
         run: node test/check-version.mjs
 
+      - name: report contract gate
+        run: node test/check-schema.mjs
+
       - name: format gate
         run: pnpm format:check
 

@@ -22,6 +22,7 @@ import { homedir } from 'node:os'
 import { join } from 'node:path'
 import type { Context } from '@deepseek-ai/cordis'
 import { defineTool } from '@deepseek-ai/dsh-tools'
+import { SCHEMA_VERSION } from './contract.js'
 import { detect } from './detect.js'
 import { collectLive } from './live.js'
 import { renderHeadline, renderMarkdown } from './render.js'
@@ -131,6 +132,7 @@ export async function runAudit(ctx: Context, options: AuditOptions = {}): Promis
   })
 
   return {
+    schemaVersion: SCHEMA_VERSION,
     generatedAt: new Date().toISOString(),
     profilePath: resolvedPath ?? '(running profile)',
     scope,
@@ -145,6 +147,7 @@ export async function runAudit(ctx: Context, options: AuditOptions = {}): Promis
     },
     findings,
     notes,
+    ...(profileSnapshot?.versionAuthority === undefined ? {} : { versionAuthority: profileSnapshot.versionAuthority }),
   }
 }
 
