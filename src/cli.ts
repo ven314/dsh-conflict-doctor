@@ -21,7 +21,7 @@
  * @module dsh-conflict-doctor/cli
  */
 import { writeFileSync } from 'node:fs'
-import { writeFixFiles } from './apply.js'
+import { rollbackFromBackup, writeFixFiles } from './apply.js'
 import { EXIT, SCHEMA_VERSION, exitCodeFor, parseFailOn, type FailOn } from './contract.js'
 import { detect } from './detect.js'
 import { dryRunAll, renderDryRun, type DryRunOutcome } from './dryrun.js'
@@ -41,6 +41,8 @@ interface CliOptions {
   dryRun?: boolean
   /** Write each applicable repair as its own patch fragment into this directory. */
   fixOut?: string
+  /** Restore a profile from a backup file created by --apply (not yet implemented). */
+  rollback?: string
   help?: boolean
 }
 
@@ -89,6 +91,9 @@ function parseArgs(argv: readonly string[]): CliOptions {
         break
       case '--fix-out':
         options.fixOut = next()
+        break
+      case '--rollback':
+        options.rollback = next()
         break
       case '--help':
       case '-h':
@@ -157,6 +162,36 @@ async function main(): Promise<void> {
     console.error('conflict-doctor: no profile found; pass --profile, or set DSH_PROFILE_DIR')
     process.exitCode = EXIT.error
     return
+  }
+
+  // `--rollback` is a standalone operation: it restores one file from a backup
+  // and re-audits to confirm the profile is back where it was. It needs no
+  // audit of its own to run, and it must not be combined with a normal audit.
+  if (options.rollback !== undefined) {
+    try {
+      const outcome = rollbackFromBackup(profilePath, options.rollback)
+      if (!outcome.ok) {
+        console.error(`conflict-doctor: --rollback refused: ${outcome.reason}`)
+        process.exitCode = EXIT.error
+        return
+      }
+      console.error(`conflict-doctor: rolled back ${outcome.targetPath} from ${outcome.backupPath} (${outcome.bytes} bytes)`)
+      // Re-audit to confirm the profile is back where it was, so the user can
+      // see the same findings they had before the change.
+      const snapshot = collectStatic(profilePath, [])
+      const findings = detect({ profile: snapshot, nodeVersion: process.version })
+      const critical = findings.filter((f) => f.severity === 'critical').length
+      const warning = findings.filter((f) => f.severity === 'warning').length
+      console.error(
+        `conflict-doctor: re-audit after rollback: ${findings.length} findings (${critical} critical, ${warning} warning)`,
+      )
+      process.exitCode = exitCodeFor({ critical, warning }, failOn)
+      return
+    } catch (error) {
+      console.error(`conflict-doctor: --rollback failed: ${error instanceof Error ? error.message : String(error)}`)
+      process.exitCode = EXIT.error
+      return
+    }
   }
 
   let report: AuditReport
