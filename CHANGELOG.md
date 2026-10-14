@@ -16,9 +16,10 @@ Nothing yet.
 
 The headline: version-sensitive checks now compare against **the host that is
 actually running**, not the profile's on-disk copies. On a packaged desktop
-install that took one profile from 5 findings to 44, with every addition
-verified genuine. Detection also grew a client-realm half and a frozen output
-contract.
+install that took one profile from 5 findings to 45, with every addition
+verified genuine. Detection also grew a client-realm half, a frozen output
+contract, and a repair engine — dry-run difference tables, pickable patch
+files, and risk grading — while the tool itself stays read-only.
 
 ### Added
 
@@ -78,16 +79,57 @@ contract.
   unknown flag or a bad `--fail-on` refuses to start.
 - `--fail-on none|warning|critical`, `--format markdown|json`, `--out <file>`.
 
+**Repair engine — the middle ground between "read-only" and "edit your config"**
+
+- Risk grading: every `patch` fix is classified from its own snippet —
+  `safe` (inserts a new row), `caution` (replaces an existing `config`),
+  `destructive` (disables or removes a row). Computed at `detect()`'s single
+  exit, so every fix has a grade by construction; `manual`/`command` and
+  `destructive` fixes are never auto-applicable.
+- Fix-conflict detection: two fixes that change the same row in incompatible
+  ways (one disables, one reconfigures) now report
+  `fix/mutually-exclusive`. Same-direction pairs are redundant, not conflicts.
+- `--dry-run`: applies each applicable repair to an **in-memory** copy of the
+  patch file, re-runs the full layer simulator and detectors, and prints a
+  before/after difference table. Nothing is written.
+- Advisory repairs are not reported as failures: a repair whose purpose is to
+  make the last layer authoritative (e.g. `profile/row-config-replaced`)
+  correctly leaves its finding in place. The table says
+  "ℹ️ 仅建议（不消除结论）" rather than "❌ 未解决", and `isFailure()` keeps
+  genuinely unresolved repairs marked as failures.
+- `--fix-out <dir>`: writes each applicable repair as its own `.patch.yml`
+  file plus a `README.md` manifest. The files are inert — DSH never loads a
+  `.patch.yml` beside `cordis.patch.yml` — so a wrong pick cannot break
+  anything. Same-code repairs get distinct filenames (`-2` suffix).
+- Guarded-write primitives (`guardTarget`, `writeWithBackup`,
+  `rollbackFromBackup`) with the path-safety gate: target must resolve inside
+  the profile (`path.relative` containment, so `sibling-node_modules` is not a
+  prefix trap), `node_modules` is refused, missing targets are refused,
+  backups + atomic rename. **Wired to no CLI flag yet** — `--apply` is
+  deliberately not enabled until rollback, non-TTY confirmation, and an
+  end-to-end integration test are in. See `docs/apply.md`.
+- `profile/host-generation-mismatch`: when many packages all import symbols a
+  single host package no longer exports, the per-package findings (each true)
+  are summarised into one root-cause finding: the profile's plugin generation
+  and the running host have drifted. The summary adds; it never replaces or
+  softens an individual finding.
+
 **Quality gates and docs**
 
 - Gates: `check-metadata`, `check-version`, `check-tarball`, `check-entry`,
-  `check-schema`, `check-golden`, `check-perf` (see `pnpm check`), plus a
-  three-OS × two-Node CI matrix.
+  `check-schema`, `check-golden`, `check-perf`, `check-memory` (see `pnpm
+  check`), plus a three-OS × two-Node CI matrix. The memory gate runs a full
+  audit in a clean subprocess (102 MB RSS against a 120 MB budget) because the
+  perf gate's own process has already loaded 500 bundle versions.
 - Docs: `version-authority.md`, `realms.md`, `layer-semantics.md`,
-  `report-format.md`.
-- Test suite grew from 38 to 103 checks, covering asar byte layout, export
+  `report-format.md`, `apply.md`. `docs/` ships in the tarball.
+- `tsconfig` runs with `strict`, `noUncheckedIndexedAccess`, and
+  `exactOptionalPropertyTypes`; the last one caught a real bug where
+  `HostRoot` optional fields were assigned `undefined`, which would have
+  serialised as `null` in JSON output.
+- Test suite grew from 38 to 141 checks, covering asar byte layout, export
   extraction, the four verdicts, the expression whitelist, key-level diffs,
-  inject cycles, and every confidence grade.
+  inject cycles, every confidence grade, the repair engine, and dry-run.
 
 ### Changed
 
@@ -98,7 +140,10 @@ contract.
 - Cross-generation peer declarations (a whole stale profile against a newer
   host) collapse into one aggregated `info` rather than one finding per package.
   The previous per-package form produced 127 findings and buried the actionable
-  ones.
+  ones. The same treatment now applies to masses of `host-import-unsatisfied`
+  against one host package: on this profile 32 per-package findings (each
+  verified against the archive's own bytes) plus one
+  `profile/host-generation-mismatch` root-cause finding.
 - A missing host archive, and a Loader-less composition, are now disclosed in
   the report instead of silently skipping the checks that depend on them.
 - Several planned detectors were deliberately **not** built because the evidence
@@ -123,6 +168,19 @@ contract.
 - Reading the archive per package made a full scan take 8s, and always reading
   `headerSize + 64 MB` made a cold scan take 18s. Now ~1.9s warm, with a budget
   gate.
+- **`profile/disable-then-reinsert` fired when the row ended up disabled.** The
+  detector recorded the finding at the moment of re-insertion and never looked
+  at what came after, so a row the user later re-disabled was still reported as
+  "实际它还在加载" — a flat-out lie. It now reports only when the row's final
+  state is enabled.
+- `--fix-out` silently overwrote one repair file with the next when two findings
+  shared a code: the per-finding filename counter made both write
+  `profile-row-config-replaced.patch.yml` while the CLI still reported two
+  files written. Counters now run across findings, so the second gets a `-2`
+  suffix.
+- `isAutoApplicable` once treated a `manual` fix as auto-applicable when its
+  risk happened to be low. It now inspects the whole fix: `manual`, `command`,
+  and `destructive` are never auto-applicable, whatever the risk.
 
 ## [0.1.0] - 2026-10-13
 
