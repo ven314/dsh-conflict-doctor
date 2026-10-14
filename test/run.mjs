@@ -160,6 +160,16 @@ await check('A2 one module under two ids', () => {
   )
   assert.ok(parameterized, 'a config-parameterized double mount must still be visible')
   assert.equal(parameterized.severity, 'info')
+  // W5-14: the deliberate shape must not offer a destructive fix. It is a
+  // parameterized mount, not an accident; telling the user to disable a row
+  // would be wrong. Only the accidental shape may be patched.
+  assert.equal(parameterized.fixes.length, 1, 'the deliberate shape offers exactly one advice, not a patch')
+  assert.equal(parameterized.fixes[0].kind, 'manual', 'a deliberate double mount must not be auto-fixable')
+  assert.equal(
+    accidental.fixes.some((f) => f.kind === 'patch'),
+    true,
+    'an accidental double mount must offer a patch',
+  )
 })
 
 await check('A3 disabled then re-inserted', () => {
