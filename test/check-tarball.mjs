@@ -23,10 +23,17 @@ import { dirname, join } from 'node:path'
 import { fileURLToPath } from 'node:url'
 
 const ROOT = join(dirname(fileURLToPath(import.meta.url)), '..')
-// Raised from 30 to 40 when the frozen JSON contract (schema/) became a shipped
-// deliverable: consumers validate against it, so it cannot live only in the
-// repo. The cap still catches an accidental leak of the source tree.
-const MAX_FILES = Number(process.argv[2] ?? 40)
+// Raised 30 -> 40 when the frozen JSON contract (schema/) became a shipped
+// deliverable, and 40 -> 60 once the module count grew: every new source file
+// ships two artifacts (`.js` and `.d.ts`), so a cap tuned to the current tree
+// fails on every legitimate addition. A count that needs raising on each new
+// module is not a guard, it is a chore.
+//
+// The leak it is meant to catch is checked directly and precisely by
+// FORBIDDEN_PREFIXES below (src/, test/, node_modules/, .github/), and the
+// required-file list proves the loadable artifacts are present. The count stays
+// only as a coarse "something exploded" signal.
+const MAX_FILES = Number(process.argv[2] ?? 60)
 
 /** Files without which an installed copy cannot be loaded or recognised. */
 const REQUIRED = [

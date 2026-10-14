@@ -17,7 +17,7 @@
  */
 import assert from 'node:assert/strict'
 import { join, resolve } from 'node:path'
-import { mkdtempSync, rmSync, writeFileSync } from 'node:fs'
+import { existsSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from 'node:fs'
 import { tmpdir } from 'node:os'
 import { Context, Service } from '@deepseek-ai/cordis'
 import { closeAsar, findNode, hasAsarPath, isAsarDir, listAsarDir, openAsar, readAsarFile, readAsarText } from '../lib/asar.js'
@@ -29,6 +29,7 @@ import { collectSurface } from '../lib/surface.js'
 import { collectLive } from '../lib/live.js'
 import { evaluateCondition, evaluateExpression } from '../lib/expr.js'
 import { RISK_LABEL, classifyRisk, findFixConflicts, isAutoApplicable, snippetRowId } from '../lib/fix.js'
+import { applySnippet, splitPatchDocument } from '../lib/patch-edit.js'
 import { validateReport } from './check-schema.mjs'
 import { versionsComparable } from '../lib/detect.js'
 import {
@@ -2234,6 +2235,104 @@ await check('L5 the real profile has no conflicting repairs', () => {
     0,
     'the real profile must not report conflicting repairs',
   )
+})
+
+/* ------------------------------------------------------------------ Part M */
+
+/**
+ * Surgical patch edits.
+ *
+ * The file being edited is the user's own hand-written configuration layer, so
+ * the property under test is not "the change landed" but "nothing ELSE moved".
+ * A line-index diff cannot show that — inserting one line shifts every later
+ * line — so these checks are structural, including one that removes the inserted
+ * line and requires the original back byte-for-byte.
+ */
+const editableSample = [
+  '# a user comment that must survive',
+  '# and a second line of it',
+  '- id: row-a',
+  '  name: "@scope/pkg-a"',
+  '  config:',
+  '    keep: me',
+  '- id: row-b',
+  '  name: "@scope/pkg-b"',
+  '  config: {"b":1}',
+  '',
+].join('\n')
+
+await check('M1 disabling a row merges into it instead of replacing it', () => {
+  // Replacing the item would silently drop the user's name and config.
+  const result = applySnippet(editableSample, '- id: row-a\n  disabled: true')
+  assert.equal(result.action, 'appended', 'the key did not exist, so it is appended to the item')
+  assert.ok(result.text.includes('@scope/pkg-a'), 'the name must survive')
+  assert.ok(result.text.includes('keep: me'), 'the config must survive')
+  assert.ok(result.text.includes('  disabled: true'))
+  assert.equal(splitPatchDocument(result.text.split('\n')).items.length, 2, 'no item was added or lost')
+})
+
+await check('M2 the preamble and every other item are byte-identical', () => {
+  const result = applySnippet(editableSample, '- id: row-b\n  config: {"b":2}')
+  assert.ok(result.text.startsWith('# a user comment that must survive\n# and a second line of it'))
+  assert.ok(result.text.includes('- id: row-a\n  name: "@scope/pkg-a"\n  config:\n    keep: me'), 'row-a must be untouched')
+  assert.ok(result.text.includes('{"b":2}'))
+})
+
+await check('M3 removing the inserted line restores the file exactly', () => {
+  // The strongest statement that nothing else moved: undo the edit textually and
+  // require the original bytes back.
+  const result = applySnippet(editableSample, '- id: row-a\n  disabled: true')
+  const lines = result.text.split('\n')
+  const at = lines.indexOf('  disabled: true')
+  assert.notEqual(at, -1)
+  lines.splice(at, 1)
+  assert.equal(lines.join('\n'), editableSample)
+})
+
+await check('M4 an absent row is appended, never rewritten', () => {
+  const result = applySnippet(editableSample, '- id: brand-new\n  disabled: true')
+  assert.equal(result.action, 'appended')
+  assert.ok(result.text.startsWith(editableSample.trimEnd()), 'the original must remain an untouched prefix')
+  assert.ok(result.text.includes('- id: brand-new'))
+})
+
+await check('M5 applying the same change twice reports no change', () => {
+  const once = applySnippet(editableSample, '- id: row-a\n  disabled: true')
+  const twice = applySnippet(once.text, '- id: row-a\n  disabled: true')
+  assert.equal(twice.changed, false, 'an idempotent edit must not rewrite the file')
+  assert.equal(twice.text, once.text)
+})
+
+await check('M6 shapes it cannot apply safely are refused, not guessed', () => {
+  // A mis-read snippet would corrupt a user's configuration, so anything that is
+  // not a disable or a config replacement is refused outright.
+  for (const bad of ['- id: x\n  name: y', '- insert:\n    - id: z', 'garbage', '', '- id: only-an-id']) {
+    assert.equal(applySnippet(editableSample, bad), undefined, `must refuse: ${JSON.stringify(bad)}`)
+  }
+})
+
+await check('M7 the real user patch survives an edit byte-for-byte', () => {
+  const profilePath = process.env.DSH_PROFILE_DIR ?? defaultProfilePath()
+  if (profilePath === undefined) return
+  const patchFile = join(profilePath, 'cordis.patch.yml')
+  if (!existsSync(patchFile)) return
+  const original = readFileSync(patchFile, 'utf8')
+  const doc = splitPatchDocument(original.split('\n'))
+  const target = doc.items.find((item) => item.id !== undefined)
+  if (target?.id === undefined) return
+
+  const edited = applySnippet(original, `- id: ${target.id}\n  disabled: true`)
+  assert.ok(edited.text.startsWith(doc.preamble.join('\n')), 'the comment block must survive')
+
+  // Undo the edit and require the original file back exactly.
+  const lines = edited.text.split('\n')
+  const at = lines.indexOf('  disabled: true')
+  assert.notEqual(at, -1, 'the disable line must have been added')
+  lines.splice(at, 1)
+  assert.equal(lines.join('\n'), original, 'undoing the edit must restore the real file byte-for-byte')
+
+  // And the file on disk was never touched by any of this.
+  assert.equal(readFileSync(patchFile, 'utf8'), original, 'the audit must not write to the profile')
 })
 
 /* ------------------------------------------------------------------ report */
