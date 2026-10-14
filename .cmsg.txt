@@ -1,0 +1,33 @@
+fix: compare peer ranges against the RUNNING host, not the stale disk (W1)
+
+A real false-positive bug introduced by the archive work, caught by reading the
+evidence rather than trusting the count. Under archive-authoritative the disk
+holds 0.1.0-rc.6 while the host runs 0.2.0-rc.2. The peer detector built its
+"installed" map from the DISK packages, so a plugin declaring `^0.2.0-rc.2` was
+reported as "the host is older than this plugin" -- five findings, every one
+wrong, because the running host satisfies those ranges exactly.
+
+installedVersions() now starts from the disk (which is all we know about
+community plugins) and then overwrites with the running host's versions, so the
+host wins wherever it is known.
+
+Fixing that exposed a second, louder problem: with the correct baseline, 120
+host-shipped packages each reported "declaration does not match the running
+host" -- 127 info findings that buried the actionable ones. That is the same
+noise failure this detector was tightened for once before, so the two
+situations are now separated explicitly:
+
+- `below` (host genuinely older than a range's minimum) stays a per-package
+  warning -- the version that actually breaks.
+- everything else collapses into ONE info finding naming how many packages are
+  affected and showing a sample. Under a cross-generation profile this is a
+  semver prerelease artifact (^0.1.0-rc.6 does not match 0.2.0-rc.2 -- the trap
+  documented in PUBLISH.md), not an incident.
+- a package the host SHIPS is never compared against its own host.
+
+Net effect on the real profile: 164 findings -> 39, with no loss of actionable
+signal. 32 import conflicts, 1 genuine peer warning, 1 aggregate info.
+
+E17 pins the bug in both directions (matching range yields nothing; a host
+genuinely below the minimum still warns). E18 pins the aggregation and the
+host-shipped exclusion. 65/65 checks.

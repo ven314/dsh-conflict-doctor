@@ -1181,6 +1181,94 @@ await check('E14 the fourth verdict resolves disk-versus-archive correctly', () 
   assert.equal(blind.verdict, 'unknown')
 })
 
+await check('E17 the peer check reads the RUNNING host, not the stale disk', () => {
+  // This is the regression that shipped five false positives: the disk held
+  // 0.1.0-rc.6 while the host ran 0.2.0-rc.2, so a `^0.2.0-rc.2` declaration was
+  // judged unsatisfied even though the running host satisfies it exactly.
+  const base = {
+    profilePath: '/fake',
+    layers: [],
+    inserts: [],
+    overrides: [],
+    missingPatchFiles: [],
+    unresolvedBundles: [],
+    declaredTools: {},
+    declaredServices: {},
+    declaredImports: {},
+    sourceFacts: {},
+    hostVersion: '0.1.0-rc.6',
+    versionAuthority: 'archive-authoritative',
+  }
+  const pkg = (name, version, ranges) => ({ name, version, dir: `/fake/${name}`, ranges })
+
+  const matching = detect({
+    profile: {
+      ...base,
+      packages: [pkg('plugin-x', '1.0.0', { '@deepseek-ai/dsh-tools': '^0.2.0-rc.2' })],
+      hostBundleVersions: { '@deepseek-ai/dsh-tools': '0.2.0-rc.2' },
+    },
+    nodeVersion: process.version,
+  }).filter((f) => f.code === 'profile/peer-range-unsatisfied')
+  assert.equal(matching.length, 0, 'the running host satisfies the range; the disk copy must not be used as the baseline')
+
+  const older = detect({
+    profile: {
+      ...base,
+      packages: [pkg('plugin-y', '1.0.0', { '@deepseek-ai/dsh-tools': '^0.3.0' })],
+      hostBundleVersions: { '@deepseek-ai/dsh-tools': '0.2.0-rc.2' },
+    },
+    nodeVersion: process.version,
+  }).filter((f) => f.code === 'profile/peer-range-unsatisfied')
+  assert.equal(older.length, 1, 'a host genuinely below the minimum must still warn')
+  assert.equal(older[0].severity, 'warning')
+})
+
+await check('E18 cross-generation declarations are aggregated, not repeated', () => {
+  // 120 packages in one stale profile all declare a different prerelease tuple,
+  // and emitting a finding each buried the actionable ones — the same noise
+  // problem this detector was tightened for once before. They collapse into a
+  // single info finding, and a genuine `below` still stands alone as a warning.
+  const skewed = []
+  for (let i = 0; i < 40; i += 1) {
+    skewed.push({
+      name: `skew-${i}`,
+      version: '1.0.0',
+      dir: `/fake/skew-${i}`,
+      ranges: { '@deepseek-ai/dsh-tools': '^0.1.0-rc.6' },
+    })
+  }
+  // A host-shipped package gets no skew finding at all (the host cannot disagree
+  // with itself), and a genuine below minimum stays a warning.
+  skewed.push({ name: '@deepseek-ai/dsh-tools', version: '0.2.0-rc.2', dir: '/fake/tools', ranges: { x: '^0.1.0-rc.6' } })
+  const findings = detect({
+    profile: {
+      profilePath: '/fake',
+      layers: [],
+      inserts: [],
+      overrides: [],
+      missingPatchFiles: [],
+      unresolvedBundles: [],
+      declaredTools: {},
+      declaredServices: {},
+      declaredImports: {},
+      sourceFacts: {},
+      versionAuthority: 'archive-authoritative',
+      packages: skewed,
+      hostBundleVersions: { '@deepseek-ai/dsh-tools': '0.2.0-rc.2' },
+    },
+    nodeVersion: process.version,
+  }).filter((f) => f.code === 'profile/peer-range-unsatisfied')
+
+  assert.equal(findings.length, 1, `40 skews must collapse to one finding; got ${findings.length}`)
+  assert.equal(findings[0].severity, 'info')
+  assert.ok(findings[0].title.includes('40'), 'the aggregate must state how many packages it covers')
+  assert.equal(
+    findings.some((f) => f.refs.includes('@deepseek-ai/dsh-tools')),
+    false,
+    'a host-shipped package must not be compared against its own host',
+  )
+})
+
 /* ------------------------------------------------------------------ report */
 
 console.log(`\n${checks - failures.length}/${checks} checks passed`)

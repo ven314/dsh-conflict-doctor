@@ -8,8 +8,9 @@
   "findings": [
     "info profile/bundle-unresolved",
     "info profile/module-under-multiple-ids",
+    "info profile/peer-range-unsatisfied",
     "info profile/row-config-replaced x3",
     "warning profile/host-import-unsatisfied x32",
-    "warning profile/peer-range-unsatisfied x5"
+    "warning profile/peer-range-unsatisfied"
   ]
 }

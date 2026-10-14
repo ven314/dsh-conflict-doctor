@@ -1,7 +1,15 @@
-﻿node_modules/
+node_modules/
 *.tgz
 *.log
 .DS_Store
+
+# Scratch files from bisecting a hang or timing a change. Never deliverables,
+# and one was staged by accident while fixing the peer-range baseline.
+.p*.mjs
+.probe*.mjs
+.bench.mjs
+.out.txt
+.err.txt
 
 # local publish helpers (never ship credential-reading scripts)
 *.ps1
