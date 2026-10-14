@@ -5,6 +5,19 @@
  */
 import type { AuditReport } from './types.js';
 /**
+ * The realm a finding belongs to, derived from its code prefix.
+ *
+ * The prefix is already the realm (`live/`, `profile/`, `client/`, `fix/`), so
+ * nothing has to be declared twice. Grouping on it matters because the two
+ * realms fail differently and are fixed differently: a host-side row problem is
+ * solved in `cordis.patch.yml`, while a browser-half problem usually has no
+ * config fix at all.
+ *
+ * @param code - a finding code such as `client/inject-unprovided`.
+ * @returns a human label for the section heading.
+ */
+export declare function realmLabelOf(code: string): string;
+/**
  * Render the audit as markdown.
  *
  * @param report - the completed audit.

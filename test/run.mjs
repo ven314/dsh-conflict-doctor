@@ -1574,6 +1574,48 @@ await check('F8 a malformed dsh.client still marks the package as a client half'
   assert.equal(readClientHalf(undefined), undefined)
 })
 
+await check('F9 the report groups findings by realm', () => {
+  // The realm is already the code prefix, so nothing is declared twice. Grouping
+  // matters because the realms fail and are fixed differently: a host row is
+  // fixed in cordis.patch.yml, while a browser-half problem usually has no
+  // config fix at all.
+  const finding = (code, severity) => ({
+    code,
+    severity,
+    title: code,
+    refs: ['r'],
+    impact: 'i',
+    evidence: ['e'],
+    fixes: [{ kind: 'manual', label: 'l', detail: 'd' }],
+  })
+  const markdown = renderMarkdown({
+    schemaVersion: SCHEMA_VERSION,
+    generatedAt: new Date().toISOString(),
+    profilePath: '/tmp/p',
+    scope: 'profile',
+    summary: { critical: 1, warning: 1, info: 2, liveEntries: 0, patchLayers: 1, scannedPackages: 1, declaredTools: 0 },
+    findings: [
+      finding('profile/row-config-replaced', 'info'),
+      finding('live/pending-missing-service', 'critical'),
+      finding('client/inject-unprovided', 'warning'),
+      finding('weird/unknown-prefix', 'info'),
+    ],
+    notes: [],
+  })
+
+  for (const label of ['运行期', '磁盘组合', '客户端半区']) {
+    assert.ok(markdown.includes(label), `the report must have a ${label} section`)
+  }
+  // An unrecognised prefix must be surfaced, never dropped: a silently missing
+  // finding is worse than an ugly heading.
+  assert.ok(markdown.includes('其他'), 'an unknown realm must still be rendered under a catch-all heading')
+
+  const liveAt = markdown.indexOf('运行期')
+  const profileAt = markdown.indexOf('磁盘组合')
+  assert.ok(liveAt !== -1 && profileAt !== -1 && liveAt < profileAt, 'live findings come before disk composition')
+  assert.ok(markdown.includes('1 critical'), 'each section must state its own severity counts')
+})
+
 /* ------------------------------------------------------------------ report */
 
 console.log(`\n${checks - failures.length}/${checks} checks passed`)
