@@ -335,13 +335,77 @@ function detectDisableThenReinsert(snapshot: StaticSnapshot): Finding[] {
 }
 
 /**
+ * A per-key diff between two config objects.
+ *
+ * The point of key-level provenance: "the config was replaced" is true but
+ * blunt, and a reader cannot tell a harmless restatement from one that drops a
+ * required key. On the real profile every restatement turned out to be
+ * key-compatible (two value changes, two pure additions, zero dropped keys),
+ * so the old whole-string wording overstated every one of them.
+ */
+interface KeyDiff {
+  /** Keys whose value changed between the layers. */
+  readonly changed: ReadonlyArray<{ key: string; from: string; to: string }>
+  /** Keys only the earlier layer had — the dangerous case. */
+  readonly dropped: readonly string[]
+  /** Keys only the later layer introduced. */
+  readonly added: readonly string[]
+}
+
+/** Read a config occurrence as a plain object, or undefined when not one. */
+function parseConfig(configJson: string): Record<string, unknown> | undefined {
+  try {
+    const value: unknown = JSON.parse(configJson)
+    if (value !== null && typeof value === 'object' && !Array.isArray(value)) {
+      return value as Record<string, unknown>
+    }
+    return undefined
+  } catch {
+    return undefined
+  }
+}
+
+/** A stable, human-readable rendering of one config value. */
+function renderValue(value: unknown): string {
+  if (typeof value === 'string') return value
+  return JSON.stringify(value) ?? String(value)
+}
+
+/**
+ * Diff two config objects key by key.
+ *
+ * @param earlier - the config that will be discarded.
+ * @param later - the config that takes its place.
+ * @returns the per-key changes.
+ */
+function diffKeys(earlier: Record<string, unknown>, later: Record<string, unknown>): KeyDiff {
+  const changed: Array<{ key: string; from: string; to: string }> = []
+  const dropped: string[] = []
+  const added: string[] = []
+  for (const [key, before] of Object.entries(earlier)) {
+    if (!(key in later)) {
+      dropped.push(key)
+      continue
+    }
+    const after = later[key]
+    if (JSON.stringify(before) !== JSON.stringify(after)) {
+      changed.push({ key, from: renderValue(before), to: renderValue(after) })
+    }
+  }
+  for (const key of Object.keys(later)) {
+    if (!(key in earlier)) added.push(key)
+  }
+  return { changed, dropped, added }
+}
+
+/**
  * Two or more layers restating one row's config: last write wins, silently.
  *
- * Reported as `info` on purpose. This pattern is the documented DSH layering
- * contract ("each mode bundle restates its complete configuration"), so on a
- * healthy profile it fires legitimately. It is still worth showing, because the
- * same mechanism silently drops a REQUIRED config written in an earlier layer —
- * the user-visible symptom being "I configured it and nothing happened".
+ * Now with key-level provenance. The old wording could only say "replaced",
+ * which is true for a harmless restatement and for one that drops a required
+ * key alike. The evidence now names which keys changed, which were added, and
+ * — the case that actually breaks something — which were dropped, upgrading the
+ * severity from `info` to `warning` for that case only.
  */
 function detectRowConfigReplaced(snapshot: StaticSnapshot): Finding[] {
   const perRow = new Map<string, Array<{ layerIndex: number; configJson: string; moduleName?: string }>>()
@@ -358,18 +422,68 @@ function detectRowConfigReplaced(snapshot: StaticSnapshot): Finding[] {
   for (const [rowId, entries] of perRow) {
     const distinct = new Set(entries.map((entry) => entry.configJson))
     if (entries.length < 2 || distinct.size < 2) continue
-    const labels = entries.map(
-      (entry) => `${snapshot.layers[entry.layerIndex]?.label ?? `layer ${entry.layerIndex}`} → ${entry.configJson}`,
-    )
-    const last = entries[entries.length - 1]
+    // `.at(-1)` plus an explicit guard, because the repo runs with
+    // noUncheckedIndexedAccess and the length check above does not narrow.
+    const last = entries.at(-1)
+    if (last === undefined) continue
+    const lastLabel = snapshot.layers[last.layerIndex]?.label ?? `layer ${last.layerIndex}`
+
+    // Key-level provenance across the whole chain: compare each earlier layer
+    // to the FINAL state, so the evidence says what the last layer actually
+    // did to what was there, rather than only that two strings differ.
+    const finalObj = parseConfig(last.configJson)
+    const evidence: string[] = []
+    let droppedKeys: string[] = []
+    let comparable = finalObj !== undefined
+    if (finalObj !== undefined) {
+      for (const entry of entries.slice(0, -1)) {
+        const earlier = parseConfig(entry.configJson)
+        if (earlier === undefined) {
+          // One undiffable layer is enough to make the whole row un-diffable;
+          // claiming "no differences" would then be unfounded.
+          comparable = false
+          continue
+        }
+        const diff = diffKeys(earlier, finalObj)
+        const label = snapshot.layers[entry.layerIndex]?.label ?? `layer ${entry.layerIndex}`
+        if (diff.dropped.length > 0) {
+          droppedKeys = [...droppedKeys, ...diff.dropped]
+          evidence.push(`${label} 写下的键被最后层丢弃：${diff.dropped.join(', ')}`)
+        }
+        for (const change of diff.changed) {
+          evidence.push(`${change.key}：${label} 写 ${JSON.stringify(change.from)} → 最后层写 ${JSON.stringify(change.to)}`)
+        }
+        if (diff.added.length > 0) evidence.push(`最后层新增（${label} 没有）：${diff.added.join(', ')}`)
+      }
+    }
+
+    // A restatement whose ONLY difference is key ORDER is not a finding. The
+    // string comparison above cannot tell it apart from a real change, but the
+    // per-key diff can: reporting it and then saying "no differences" would be
+    // noise that teaches the reader to skim past this detector.
+    if (comparable && evidence.length === 0) continue
+    if (!comparable) {
+      evidence.push(
+        finalObj === undefined ? '最终 config 不是纯对象，无法逐键对比。' : '有层的 config 不是纯对象，无法逐键对比整条链。',
+      )
+    }
+    evidence.push(`判定依据：patch 层整段替换，第 ${last.layerIndex} 层（${lastLabel}）之后即最终生效值。`)
+
     findings.push({
       code: 'profile/row-config-replaced',
-      severity: 'info',
-      title: `row“${rowId}” 的 config 被多层覆盖，只有最后一层生效`,
+      // A dropped key is the "I configured it and nothing happened" case, so it
+      // upgrades from info to warning; everything else stays informational.
+      severity: droppedKeys.length > 0 ? 'warning' : 'info',
+      title:
+        droppedKeys.length > 0
+          ? `row“${rowId}” 的 config 被最后层覆盖，并丢弃了 ${droppedKeys.length} 个前面层写下的键`
+          : `row“${rowId}” 的 config 被多层覆盖，只有最后一层生效`,
       refs: [rowId, ...entries.map((entry) => snapshot.layers[entry.layerIndex]?.label ?? `layer ${entry.layerIndex}`)],
       impact:
-        'patch 是整段替换而不是合并：前面层写下的 config 全部被丢掉。如果那层写的是必需项（而不是模式差异），功能会以「配置明明写了却无效」的形式坏掉。',
-      evidence: labels,
+        droppedKeys.length > 0
+          ? '整段替换丢掉了前面层的键。如果丢的是必需项，功能会以「配置明明写了却无效」的形式坏掉——这是需要处理的版本。'
+          : 'patch 是整段替换而不是合并：前面层写下的 config 全部被丢掉。若逐键对比显示只是同值重述或纯增量（见证据），无需处理。',
+      evidence,
       fixes: [
         {
           kind: 'patch',

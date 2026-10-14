@@ -1860,6 +1860,143 @@ await check('H5 the real profile decides exactly the pure expressions', () => {
   }
 })
 
+/* ------------------------------------------------------------------ Part I */
+
+/**
+ * Key-level config provenance.
+ *
+ * The old wording could only say "the config was replaced", which is true both
+ * for a harmless restatement and for one that drops a required key — the
+ * "I configured it and nothing happened" case. These checks pin the separation,
+ * including the dropped-key case, which does NOT occur on this machine's real
+ * profile and would otherwise be untested code.
+ */
+const layerSnapshot = (inserts, overrides, layerCount = 4) => ({
+  profilePath: '/fake',
+  layers: Array.from({ length: layerCount }, (_, index) => ({
+    index,
+    label: `layer-${index}`,
+    kind: 'bundle',
+    file: `/fake/${index}.yml`,
+  })),
+  inserts,
+  overrides,
+  missingPatchFiles: [],
+  unresolvedBundles: [],
+  declaredTools: {},
+  declaredServices: {},
+  declaredImports: {},
+  sourceFacts: {},
+  packages: [],
+  versionAuthority: 'unknown',
+})
+const cfgInsert = (rowId, layerIndex, config) => ({
+  rowId,
+  layerIndex,
+  moduleName: 'mod',
+  hasConfig: true,
+  configJson: JSON.stringify(config),
+})
+
+const configFindings = (snapshot) =>
+  detect({ profile: snapshot, nodeVersion: process.version }).filter((f) => f.code === 'profile/row-config-replaced')
+
+await check('I1 a dropped key upgrades the finding to a warning', () => {
+  // The case the whole detector exists for: an earlier layer writes a required
+  // key, a later layer restates the config without it, and nothing reports it.
+  const findings = configFindings(
+    layerSnapshot([cfgInsert('row-a', 0, { required: true, other: 1 }), cfgInsert('row-a', 2, { other: 2 })], []),
+  )
+  assert.equal(findings.length, 1)
+  assert.equal(findings[0].severity, 'warning', 'a dropped key is not informational')
+  assert.ok(
+    findings[0].evidence.some((line) => line.includes('丢弃') && line.includes('required')),
+    `the dropped key must be named; got ${JSON.stringify(findings[0].evidence)}`,
+  )
+  assert.ok(findings[0].title.includes('丢弃'), 'the title must say a key was dropped')
+})
+
+await check('I2 a pure value change stays informational and names both values', () => {
+  const findings = configFindings(
+    layerSnapshot([cfgInsert('row-b', 0, { provider: 'old-provider' }), cfgInsert('row-b', 1, { provider: 'new-provider' })], []),
+  )
+  assert.equal(findings.length, 1)
+  assert.equal(findings[0].severity, 'info', 'no key was lost, so this stays a note')
+  const change = findings[0].evidence.find((line) => line.startsWith('provider'))
+  assert.ok(change?.includes('old-provider') && change.includes('new-provider'), `both values must appear; got ${change}`)
+})
+
+await check('I3 a pure addition is reported as an addition, not a loss', () => {
+  const findings = configFindings(
+    layerSnapshot(
+      [cfgInsert('row-c', 0, { presets: { a: 1 } }), cfgInsert('row-c', 1, { presets: { a: 1 }, defaultPreset: 'x' })],
+      [],
+    ),
+  )
+  assert.equal(findings.length, 1)
+  assert.equal(findings[0].severity, 'info')
+  assert.ok(
+    findings[0].evidence.some((line) => line.includes('新增') && line.includes('defaultPreset')),
+    `the addition must be named; got ${JSON.stringify(findings[0].evidence)}`,
+  )
+  // `presets` has an equal value in both layers, so it must NOT be listed as changed.
+  assert.equal(
+    findings[0].evidence.some((line) => line.startsWith('presets：')),
+    false,
+    'an unchanged key must not be reported as a change',
+  )
+})
+
+await check('I4 a byte-identical restatement across layers is not reported', () => {
+  // Restating the same values is the documented DSH layering contract and
+  // carries no information, so it must stay silent rather than add noise.
+  const findings = configFindings(layerSnapshot([cfgInsert('row-d', 0, { a: 1 }), cfgInsert('row-d', 1, { a: 1 })], []))
+  assert.equal(findings.length, 0, 'an identical restatement is not a finding')
+})
+
+await check('I5 key order alone is not a change', () => {
+  // JSON.stringify is order-sensitive; the detector compares per key, so a
+  // reordered restatement must not be reported as a value change.
+  const findings = configFindings(
+    layerSnapshot([cfgInsert('row-e', 0, { a: 1, b: 2 }), cfgInsert('row-e', 1, { b: 2, a: 1 })], []),
+  )
+  assert.equal(findings.length, 0, 'reordering keys is not a config change')
+})
+
+await check('I6 a non-object config degrades instead of claiming a diff', () => {
+  const findings = configFindings(layerSnapshot([cfgInsert('row-f', 0, [1, 2]), cfgInsert('row-f', 1, [3, 4])], []))
+  assert.equal(findings.length, 1, 'an array config still differs by string')
+  assert.ok(
+    findings[0].evidence.some((line) => line.includes('无法逐键对比')),
+    'the evidence must admit it could not diff per key',
+  )
+  assert.equal(findings[0].severity, 'info', 'an undiffable config must not escalate to warning')
+})
+
+await check('I7 the real profile reports key-level evidence for every restatement', () => {
+  const profilePath = process.env.DSH_PROFILE_DIR ?? defaultProfilePath()
+  if (profilePath === undefined) return
+  let snapshot
+  try {
+    snapshot = collectStatic(profilePath, [])
+  } catch {
+    return
+  }
+  const findings = configFindings(snapshot)
+  if (findings.length === 0) return
+  for (const finding of findings) {
+    assert.ok(finding.evidence.length > 0, `every finding must carry evidence; ${finding.code} for ${finding.refs[0]} had none`)
+    // A finding that names specific keys must not fall back to the old
+    // whole-string form, which is what made the message uninformative.
+    assert.ok(
+      finding.evidence.some(
+        (line) => line.includes('：') || line.includes('新增') || line.includes('无差异') || line.includes('无法逐键对比'),
+      ),
+      `evidence must be key-level or honestly admit it could not be; got ${JSON.stringify(finding.evidence)}`,
+    )
+  }
+})
+
 /* ------------------------------------------------------------------ report */
 
 console.log(`\n${checks - failures.length}/${checks} checks passed`)
