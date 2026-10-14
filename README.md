@@ -111,7 +111,7 @@ conflict_doctor { scope: "all" | "live" | "profile", profilePath?: string, forma
 1. **只读。** 不注册服务、不改配置、不碰注册表，只读 + 报告。一个「治理」插件自己成为故障源是荒谬的。
 2. **只有一个硬依赖 `tools`。** `loader`/`commands`/`systemPrompt`/`pluginManager` 全部在用时 `ctx.get`——一个诊断插件如果自己停在 PENDING 就是个笑话。注册全部包在 `ctx.effect()` 里，卸载时干净撤销。
 3. **宁缺毋滥。** 每条检测器都在真实 profile 上跑过并调过阈值。真实数据把第一版的 23 条噪音收敛到可执行的少数几条；宁可不报，也不拿错误基准报。
-4. **纯函数内核。** 采集（`live.ts` / `static.ts` / `source.ts`）→ 检测（`detect.ts`）→ 渲染（`render.ts`）都是纯函数，可以用 fixture 单测，不需要启动 harness。38 项检查覆盖每个检测器的正例+反例、真实 profile 扫描、以及 Cordis 集成。
+4. **纯函数内核。** 采集（`live.ts` / `static.ts` / `source.ts` / `hostface.ts`）→ 检测（`detect.ts`）→ 渲染（`render.ts`）都是纯函数，可以用 fixture 单测，不需要启动 harness。103 项检查覆盖每个检测器的正例+反例、asar 字节布局、导出面提取、四态版本判定、表达式白名单、键级 config diff、inject 环、真实 profile 扫描、以及 Cordis 集成。
 
 ## 主动播报
 

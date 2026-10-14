@@ -59,15 +59,16 @@ const ENTRY_PATH = join(ROOT, 'catalog-entry.yml')
  *
  * `contributing.md` states that a description is read as a claim and checked
  * against the code, so every number here is verified by `test/run.mjs` and
- * `src/detect.ts` (17 distinct conflict checks). `description.en` must end with
- * a period and `zh` with a full stop; a `: ` inside a value requires quoting.
+ * `src/detect.ts` (23 distinct conflict codes: 7 live, 14 profile, 2 client).
+ * `description.en` must end with a period and `zh` with a full stop; a `: `
+ * inside a value requires quoting.
  */
 const ENTRY_BODY = `url: https://github.com/${OWNER}/${REPO}
 name: ${OWNER}/${REPO}
 category: dev
 description:
-  en: "Conflict diagnosis and repair for DeepSeek Harness plugins. Builds a capability graph of the running Loader profile and of the on-disk cordis.patch.yml layers, then reports the conflicts that fail silently: a fiber stuck PENDING on a service no plugin provides, a tool id two plugins both register, duplicate Loader entry ids, a row disabled by one layer and re-inserted by another, and a plugin importing a host symbol the running host does not export. Every finding carries its evidence and the exact patch that fixes it."
-  zh: "DSH 插件冲突诊断与修复建议。把运行期能力图谱与磁盘上的 cordis.patch.yml 层对齐，检出那些不会自己报错的静默故障：卡在 PENDING 等待无人提供的服务、两个插件注册同一个 tool id、Loader entry id 重复、某层停用又被后一层重新插入的行、以及插件导入了运行宿主并不导出的符号。每条结论都带证据与可直接粘贴的修复。"
+  en: "Conflict diagnosis and repair for DeepSeek Harness plugins. Builds a capability graph of the running Loader profile and of the on-disk cordis.patch.yml layers, comparing imports, peer ranges and config against the host that is ACTUALLY running rather than the profile's possibly-stale copies, and reports the conflicts that fail silently: a fiber stuck PENDING on a service no plugin provides, a browser half injecting a client module nothing provides, a tool id two plugins both register, duplicate Loader entry ids, a row disabled by one layer and re-inserted by another, an import of a host subpath the running host does not export, and a cycle among inject declarations. Every finding carries its evidence, a confidence grade for who owns a name, and the exact patch that fixes it."
+  zh: "DSH 插件冲突诊断与修复建议。把运行期能力图谱与磁盘上的 cordis.patch.yml 层对齐，并与真正在运行的宿主（而不是 profile 里可能过期的副本）比对导入、peer 范围与配置，检出那些不会自己报错的静默故障：卡在 PENDING 等待无人提供的服务、浏览器半区注入了无人提供的客户端模块、两个插件注册同一个 tool id、Loader entry id 重复、某层停用又被后一层重新插入的行、导入了运行宿主未通过 exports 暴露的子路径、以及 inject 声明之间成环。每条结论都带证据、归属置信度与可直接粘贴的修复。"
 `
 
 const log = (...a) => console.log(...a)

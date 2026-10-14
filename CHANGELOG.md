@@ -10,41 +10,119 @@ in `src/detect.ts`; the user-facing table lives in README.
 
 ## [Unreleased]
 
+Nothing yet.
+
+## [0.2.0] - 2026-10-14
+
+The headline: version-sensitive checks now compare against **the host that is
+actually running**, not the profile's on-disk copies. On a packaged desktop
+install that took one profile from 5 findings to 44, with every addition
+verified genuine. Detection also grew a client-realm half and a frozen output
+contract.
+
 ### Added
 
-- **Version-sensitive checks now run against the running host**, not the
-  profile's on-disk copies. A packaged desktop app serves its bundles from its
-  own archive, so `profiles/node_modules` can be a generation behind; comparing
-  against it is how this tool once reported seven missing symbols that were
-  present. A zero-dependency asar reader (`src/asar.ts`) plus an export-surface
-  walker (`src/surface.ts`) and host locator (`src/hostroot.ts`) supply the real
-  baseline.
+**Host archive reading — the release's main change**
+
+- Zero-dependency asar reader (`src/asar.ts`), export-surface walker
+  (`src/surface.ts`), and host locator (`src/hostroot.ts`). A packaged app
+  serves its bundles from its own archive while `profiles/node_modules` may hold
+  a different generation; comparing against the stale copy is how this tool once
+  reported seven missing symbols that were present in the running host.
 - A fourth version-authority verdict, `archive-authoritative`. Previously
   `stale-disk` meant every version-sensitive detector abstained, so a typical
-  desktop install never reported API-level conflicts at all. On this machine
-  that change moved the profile audit from 5 findings to 42 — 32 of them import
-  collisions, each verified as real.
-- `docs/version-authority.md`: the design constraint, the four verdicts, both
-  asar format surprises, and how each was measured.
-- New gates: `check-tarball`, `check-entry`, `check-golden`, `check-perf`,
-  `check-version` (see `pnpm check`), and a five-platform CI matrix.
+  desktop install never reported API-level conflicts at all.
+- `profile/host-subpath-not-exported` — an import of a subpath the running host
+  does not expose through `exports`. Node throws
+  `ERR_PACKAGE_PATH_NOT_EXPORTED` even when the file exists, so no symbol-level
+  check can see it.
+
+**Client realm detectors**
+
+- `client/inject-unprovided` — the client-side twin of
+  `live/pending-missing-service`. When a browser half injects a client module
+  nothing provides, the half is silently inert.
+- `client/service-name-shared-with-host` — a service name on both sides.
+  Reported as `info`, because the page and the host keep separate registries and
+  a shared name is legitimate; the point is that the exclusion used to be silent.
+- Realm-aware report grouping, so host-side and browser-side findings are read
+  separately (they are fixed differently).
+
+**Attribution confidence**
+
+- Tool ids and service names are now graded `certain` / `probable` /
+  `ambiguous` / `unknown` instead of the README's blanket "cannot be attributed
+  with certainty". On this machine: 83 names, 79 certain, 4 probable, 0
+  ambiguous. Weaker attributions are listed first.
+
+**Layer semantics**
+
+- A whitelist `!!js` interpreter (`src/expr.ts`) that decides pure expressions
+  (literals, `process.platform`/`arch`/`version`, comparisons, `!`/`&&`/`||`/`??`)
+  and refuses everything else — no `eval`, no `Function`, no property chains, no
+  function calls, no template literals. 5 of the 17 expressions on this profile
+  are now decided; the other 12 are still recorded verbatim and disclosed.
+- `profile/inject-cycle` — a cycle among patch-layer `inject` declarations.
+  Detected without knowing who provides what, so it does not depend on the
+  provider-scan blind spot.
+- Key-level config provenance for `profile/row-config-replaced`: which keys
+  changed and between which values, which the last layer added, and which were
+  dropped. A dropped key upgrades the finding to `warning`.
+
+**Output contract and CLI**
+
+- Frozen JSON contract (`schema/audit-report.schema.json`, JSON Schema 2020-12)
+  with a `schemaVersion` field, shipped in the tarball.
+- `conflict-doctor` CLI with stable exit codes: 0 clean, 1 warning under
+  `--fail-on warning`, 2 critical (default), 3 the audit could not run. An
+  unknown flag or a bad `--fail-on` refuses to start.
+- `--fail-on none|warning|critical`, `--format markdown|json`, `--out <file>`.
+
+**Quality gates and docs**
+
+- Gates: `check-metadata`, `check-version`, `check-tarball`, `check-entry`,
+  `check-schema`, `check-golden`, `check-perf` (see `pnpm check`), plus a
+  three-OS × two-Node CI matrix.
+- Docs: `version-authority.md`, `realms.md`, `layer-semantics.md`,
+  `report-format.md`.
+- Test suite grew from 38 to 103 checks, covering asar byte layout, export
+  extraction, the four verdicts, the expression whitelist, key-level diffs,
+  inject cycles, and every confidence grade.
 
 ### Changed
 
 - The import check resolves symbols against the running host's export surface,
-  cached per package. Previously it read the profile's stale copy.
-- A missing host archive is now disclosed in the report instead of silently
-  skipping the checks that depend on it.
+  cached per package, instead of the profile's stale copy.
+- Peer-range comparisons use the running host's versions. The disk only fills
+  gaps for packages the host does not ship.
+- Cross-generation peer declarations (a whole stale profile against a newer
+  host) collapse into one aggregated `info` rather than one finding per package.
+  The previous per-package form produced 127 findings and buried the actionable
+  ones.
+- A missing host archive, and a Loader-less composition, are now disclosed in
+  the report instead of silently skipping the checks that depend on them.
+- Several planned detectors were deliberately **not** built because the evidence
+  to support them does not exist; each is documented with its reasoning in
+  `docs/realms.md` and `docs/layer-semantics.md`.
 
 ### Fixed
 
+- **Every conditional disable was silently read as enabled.** `disabled` was
+  compared with `=== true`, and a `!!js` expression is a string, so
+  `disabled: !!js process.platform === 'win32'` was ignored. On Windows that
+  meant rows that are actually disabled (`bash-sandbox`, `tool-bash`) were
+  treated as running.
 - A 121 MB archive's u32 header-size field does not locate the JSON tree (it is
-  8 bytes short), and content offsets are relative to the end of the tree, not
-  the file start. Both were established by SHA-256 against the archive's own
+  8 bytes short), and content offsets are relative to the end of the tree rather
+  than the file start. Both were established by SHA-256 against the archive's own
   `integrity` records.
-- Reading the archive per package (rather than keeping one handle) made a full
-  profile scan take 8 seconds; always reading `headerSize + 64 MB` made a cold
-  scan take 18. Now ~1.9s warm, with a budget gate.
+- A key-order-only restatement produced a finding whose own evidence said "no
+  differences". The per-key diff now decides, and reports nothing.
+- `!false` evaluated to `false`: the truthiness check inside `!` was inverted.
+  Truthiness now lives in one helper shared by `!`/`&&`/`||`.
+- Reading the archive per package made a full scan take 8s, and always reading
+  `headerSize + 64 MB` made a cold scan take 18s. Now ~1.9s warm, with a budget
+  gate.
 
 ## [0.1.0] - 2026-10-13
 
@@ -150,5 +228,6 @@ where a patch can repair it, the fix ships paste-ready YAML.
   `unknown`). See `resolveVersionAuthority` in `src/static.ts` and
   [`docs/version-authority.md`](docs/version-authority.md).
 
-[Unreleased]: https://github.com/ven314/dsh-conflict-doctor/compare/v0.1.0...HEAD
+[Unreleased]: https://github.com/ven314/dsh-conflict-doctor/compare/v0.2.0...HEAD
+[0.2.0]: https://github.com/ven314/dsh-conflict-doctor/releases/tag/v0.2.0
 [0.1.0]: https://github.com/ven314/dsh-conflict-doctor/releases/tag/v0.1.0

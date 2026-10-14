@@ -1,6 +1,6 @@
 {
   "name": "dsh-conflict-doctor",
-  "version": "0.1.0",
+  "version": "0.2.0",
   "description": "DSH plugin conflict governance: builds a live capability graph of the running Loader profile, detects cross-plugin conflicts (duplicate loader rows, tool-id collisions, services a plugin waits for forever, dangling disables, version skew), and emits the exact patch to fix each one. · DSH 插件冲突诊断与修复建议：把「插件为什么不生效 / 谁和谁撞了」变成一条可执行结论。",
   "type": "module",
   "main": "lib/index.js",
