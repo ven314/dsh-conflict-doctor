@@ -74,20 +74,72 @@ function packageDir(root: string, modulesRoot: string, name: string): string {
 }
 
 /**
+ * Reject package names that could escape the modules root.
+ *
+ * Import specifiers come from plugin source, so a crafted name must not be able
+ * to walk out of `node_modules` and read arbitrary archive content. npm's own
+ * name grammar is the whitelist: optional `@scope/`, then a name of lowercase
+ * letters, digits, and `-._`.
+ */
+const PACKAGE_NAME = /^(?:@[a-z0-9-~][a-z0-9-._~]*\/)?[a-z0-9-~][a-z0-9-._~]*$/
+
+export function isSafePackageName(name: string): boolean {
+  if (name.length === 0 || name.length > 214) return false
+  if (name.includes('..') || name.includes('/', name.startsWith('@') ? name.indexOf('/') + 1 : 0)) return false
+  return PACKAGE_NAME.test(name)
+}
+
+/** Surfaces already computed this process, keyed by package name. */
+const surfaceCache = new Map<string, ExportSurface | undefined>()
+
+/** Forget cached surfaces (used by tests and between audits). */
+export function clearHostCaches(): void {
+  surfaceCache.clear()
+  closeHostArchive()
+  archiveLookupFailed = false
+}
+
+/**
  * Open the running host's archive.
+ *
+ * The handle is KEPT OPEN and reused. Each `openAsar` decodes a ~3.4 MB JSON
+ * tree, and doing that per package turned one profile scan into 8 seconds of
+ * re-parsing identical bytes. {@link closeHostArchive} releases it.
  *
  * @returns the archive and its root, or undefined when there is nothing to open.
  */
+let cachedArchive: { archive: AsarArchive; root: HostRoot } | undefined
+let archiveLookupFailed = false
+
 export function openHostArchive(): { archive: AsarArchive; root: HostRoot } | undefined {
+  if (cachedArchive !== undefined) return cachedArchive
+  // A failure is cached too: retrying a missing or corrupt archive for every
+  // package would pay the same cost for the same negative answer.
+  if (archiveLookupFailed) return undefined
+
   const root = findHostRoot()
-  if (root === undefined || root.kind !== 'asar' || root.archivePath === undefined) return undefined
-  try {
-    return { archive: openAsar(root.archivePath), root }
-  } catch {
-    // A unreadable archive is a coverage gap, never a crash: fall back silently
-    // and let the caller say so in the report.
+  if (root === undefined || root.kind !== 'asar' || root.archivePath === undefined) {
+    archiveLookupFailed = true
     return undefined
   }
+  try {
+    cachedArchive = { archive: openAsar(root.archivePath), root }
+    return cachedArchive
+  } catch {
+    archiveLookupFailed = true
+    return undefined
+  }
+}
+
+/** Release the cached handle. Call when an audit finishes. */
+export function closeHostArchive(): void {
+  if (cachedArchive === undefined) return
+  try {
+    closeAsar(cachedArchive.archive)
+  } catch {
+    // Already closed; nothing to undo.
+  }
+  cachedArchive = undefined
 }
 
 /**
@@ -126,7 +178,9 @@ export function collectHostFacts(): HostFacts | undefined {
     notes.push(`the running host's bundle versions could not be read: ${error instanceof Error ? error.message : String(error)}`)
   }
 
-  closeAsar(archive)
+  // Deliberately NOT closed: openHostArchive caches the handle and later
+  // package reads reuse it. Closing here made every subsequent call reopen the
+  // archive. Use closeHostArchive() when the audit ends.
   return { origin: root.note ?? root.path, bundles, complete, notes }
 }
 
@@ -149,6 +203,16 @@ function readVersion(archive: AsarArchive, dir: string): string | undefined {
  * @returns the surface, or undefined when the package is not in this host.
  */
 export function readHostSurface(name: string): ExportSurface | undefined {
+  // Package names reach here from a plugin's import statements, so they are
+  // attacker-influenced in the threat model: a name containing traversal
+  // segments must never resolve outside the modules root.
+  if (!isSafePackageName(name)) return undefined
+
+  // Cache the RESULT per package: a profile importing one host package from
+  // dozens of plugins would otherwise re-walk the same closure each time.
+  const cached = surfaceCache.get(name)
+  if (cached !== undefined) return cached
+
   const opened = openHostArchive()
   if (opened === undefined) return undefined
   const { archive, root } = opened
@@ -162,9 +226,15 @@ export function readHostSurface(name: string): ExportSurface | undefined {
     } catch {
       // A broken manifest still allows the directory-union fallback.
     }
-    return collectSurface(archiveSource(archive), dir, manifest)
-  } finally {
-    closeAsar(archive)
+    // Handle intentionally left open for reuse; see closeHostArchive().
+    const surface = collectSurface(archiveSource(archive), dir, manifest)
+    surfaceCache.set(name, surface)
+    return surface
+  } catch {
+    // Cache the negative answer too, so a broken package is not retried for
+    // every plugin that imports it.
+    surfaceCache.set(name, undefined)
+    return undefined
   }
 }
 

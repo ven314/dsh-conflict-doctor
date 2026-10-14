@@ -43,6 +43,12 @@ export interface AsarArchive {
 /**
  * Decode the pickled header of an asar file.
  *
+ * Reads in a growing window rather than one huge slurp. The first attempt covers
+ * `headerSize` plus a small slack, which on the real 121 MB archive is a single
+ * ~3.6 MB read; the window only doubles if the JSON is still unbalanced. An
+ * earlier version always read `headerSize + 64 MB`, which made a cold audit
+ * spend seconds copying bytes it then threw away.
+ *
  * @param path - archive to open.
  * @returns the decoded root node and an open descriptor.
  * @throws when the file is too small, malformed, or not JSON at all — the

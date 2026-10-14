@@ -21,7 +21,7 @@ import { mkdtempSync, rmSync, writeFileSync } from 'node:fs'
 import { tmpdir } from 'node:os'
 import { Context, Service } from '@deepseek-ai/cordis'
 import { closeAsar, findNode, hasAsarPath, isAsarDir, listAsarDir, openAsar, readAsarFile, readAsarText } from '../lib/asar.js'
-import { readHostSurface } from '../lib/hostface.js'
+import { clearHostCaches, findHostRoot, isSafePackageName, readHostSurface } from '../lib/hostface.js'
 import { collectSurface } from '../lib/surface.js'
 import { versionsComparable } from '../lib/detect.js'
 import {
@@ -1113,6 +1113,53 @@ await check('E13 versionsComparable admits exactly the trustworthy verdicts', ()
   assert.equal(versionsComparable(at('archive-authoritative')), true, 'the running host archive is a real baseline')
   assert.equal(versionsComparable(at('stale-disk')), false, 'a stale disk with no substitute must abstain')
   assert.equal(versionsComparable(at('unknown')), false)
+})
+
+await check('E15 a package name that could escape the modules root is rejected', () => {
+  // Package names arrive from plugin import statements, so a crafted one must
+  // never reach outside node_modules.
+  for (const bad of ['../../etc/passwd', '@a/../../b', '/abs/path', 'a b', '', '@scope/../../x', 'a/../b']) {
+    assert.equal(isSafePackageName(bad), false, `${JSON.stringify(bad)} must be rejected`)
+  }
+  for (const good of ['@deepseek-ai/dsh-tools', 'dsh-base', '@scope/name', 'a.b-c_d']) {
+    assert.equal(isSafePackageName(good), true, `${JSON.stringify(good)} must be accepted`)
+  }
+  // The rejection must be enforced at the public read, not only in a helper.
+  assert.equal(readHostSurface('../../../etc/passwd'), undefined)
+})
+
+await check('E16 a missing host archive is disclosed, never silently skipped', () => {
+  // Runs only where a host DOES exist: point discovery at an empty world and
+  // assert the report says so rather than quietly omitting the checks.
+  if (readHostSurface('@deepseek-ai/dsh-tools') === undefined) return
+  const before = { ...process.env }
+  const emptyDir = mkdtempSync(join(tmpdir(), 'cd-nohost-'))
+  try {
+    process.env.LOCALAPPDATA = emptyDir
+    process.env.APPDATA = emptyDir
+    process.env.USERPROFILE = emptyDir
+    delete process.env.DSH_APP_ASAR
+    delete process.env.DSH_INSTALL_ROOT
+    delete process.env.DSH_HOST_ROOT
+    clearHostCaches()
+    assert.equal(findHostRoot(), undefined, 'the masked environment must expose no host')
+
+    const profilePath = defaultProfilePath()
+    if (profilePath === undefined) return
+    const snapshot = collectStatic(profilePath, [])
+    assert.equal(snapshot.versionAuthority, 'unknown', 'without a host the baseline is unknowable')
+    assert.ok(
+      snapshot.notes.some((note) => note.includes('archive')),
+      `the coverage note must mention the missing archive; got ${JSON.stringify(snapshot.notes)}`,
+    )
+  } finally {
+    for (const key of ['LOCALAPPDATA', 'APPDATA', 'USERPROFILE']) {
+      if (before[key] === undefined) delete process.env[key]
+      else process.env[key] = before[key]
+    }
+    rmSync(emptyDir, { recursive: true, force: true })
+    clearHostCaches()
+  }
 })
 
 await check('E14 the fourth verdict resolves disk-versus-archive correctly', () => {

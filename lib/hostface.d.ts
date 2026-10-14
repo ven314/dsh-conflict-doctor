@@ -37,15 +37,15 @@ export interface HostFacts {
     /** Notes about anything skipped or unreadable. */
     readonly notes: readonly string[];
 }
-/**
- * Open the running host's archive.
- *
- * @returns the archive and its root, or undefined when there is nothing to open.
- */
+export declare function isSafePackageName(name: string): boolean;
+/** Forget cached surfaces (used by tests and between audits). */
+export declare function clearHostCaches(): void;
 export declare function openHostArchive(): {
     archive: AsarArchive;
     root: HostRoot;
 } | undefined;
+/** Release the cached handle. Call when an audit finishes. */
+export declare function closeHostArchive(): void;
 /**
  * Read every bundled package version the running host ships.
  *

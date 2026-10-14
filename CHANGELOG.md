@@ -10,7 +10,41 @@ in `src/detect.ts`; the user-facing table lives in README.
 
 ## [Unreleased]
 
-Nothing yet.
+### Added
+
+- **Version-sensitive checks now run against the running host**, not the
+  profile's on-disk copies. A packaged desktop app serves its bundles from its
+  own archive, so `profiles/node_modules` can be a generation behind; comparing
+  against it is how this tool once reported seven missing symbols that were
+  present. A zero-dependency asar reader (`src/asar.ts`) plus an export-surface
+  walker (`src/surface.ts`) and host locator (`src/hostroot.ts`) supply the real
+  baseline.
+- A fourth version-authority verdict, `archive-authoritative`. Previously
+  `stale-disk` meant every version-sensitive detector abstained, so a typical
+  desktop install never reported API-level conflicts at all. On this machine
+  that change moved the profile audit from 5 findings to 42 — 32 of them import
+  collisions, each verified as real.
+- `docs/version-authority.md`: the design constraint, the four verdicts, both
+  asar format surprises, and how each was measured.
+- New gates: `check-tarball`, `check-entry`, `check-golden`, `check-perf`,
+  `check-version` (see `pnpm check`), and a five-platform CI matrix.
+
+### Changed
+
+- The import check resolves symbols against the running host's export surface,
+  cached per package. Previously it read the profile's stale copy.
+- A missing host archive is now disclosed in the report instead of silently
+  skipping the checks that depend on it.
+
+### Fixed
+
+- A 121 MB archive's u32 header-size field does not locate the JSON tree (it is
+  8 bytes short), and content offsets are relative to the end of the tree, not
+  the file start. Both were established by SHA-256 against the archive's own
+  `integrity` records.
+- Reading the archive per package (rather than keeping one handle) made a full
+  profile scan take 8 seconds; always reading `headerSize + 64 MB` made a cold
+  scan take 18. Now ~1.9s warm, with a budget gate.
 
 ## [0.1.0] - 2026-10-13
 
@@ -112,8 +146,9 @@ where a patch can repair it, the fix ships paste-ready YAML.
 - **Silent failure** — a conflict that produces no error and no log. The reason
   this tool exists.
 - **Version authority** — whether the versions on disk describe the host that is
-  actually running (`authoritative`, `stale-disk`, `unknown`). See
-  `resolveVersionAuthority` in `src/static.ts`.
+  actually running (`authoritative`, `archive-authoritative`, `stale-disk`,
+  `unknown`). See `resolveVersionAuthority` in `src/static.ts` and
+  [`docs/version-authority.md`](docs/version-authority.md).
 
 [Unreleased]: https://github.com/ven314/dsh-conflict-doctor/compare/v0.1.0...HEAD
 [0.1.0]: https://github.com/ven314/dsh-conflict-doctor/releases/tag/v0.1.0

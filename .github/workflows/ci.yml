@@ -72,6 +72,12 @@ jobs:
       - name: golden gate (skips when no profile exists)
         run: node test/check-golden.mjs
 
+      # Host-dependent too, so it skips on CI. Still worth invoking: a budget
+      # miss prints which read regressed and why that usually means an ORDER
+      # change rather than slow hardware.
+      - name: performance budget (skips when no host exists)
+        run: node test/check-perf.mjs
+
       # A broken tarball is the one failure `pnpm test` cannot see: the suite
       # runs against src/, while a profile imports lib/.
       - name: tarball contents

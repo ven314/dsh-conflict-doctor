@@ -419,11 +419,18 @@ export function collectStatic(
         archiveVersions = Object.fromEntries(facts.bundles)
         archiveOrigin = facts.origin
         notes.push(...facts.notes)
+      } else {
+        // W1-16: no archive is a COVERAGE GAP, not a silent no-op. Saying
+        // nothing here would leave the reader believing version-sensitive
+        // checks ran and found nothing, when in fact they never ran.
+        notes.push(
+          '运行宿主的 archive 没有找到（非打包安装，或安装在未知位置）：peer 范围与导入符号这两类「必须与运行宿主逐条比对」的检查不可判定，' +
+            '只输出不依赖版本的结构类结论。设置 DSH_INSTALL_ROOT 或 DSH_APP_ASAR 可指定安装位置。',
+        )
       }
     } catch (error) {
       notes.push(
-        `the running host's archive could not be read, so version-sensitive findings abstain: ` +
-          `${error instanceof Error ? error.message : String(error)}`,
+        `运行宿主的 archive 读取失败，因此版本敏感的结论不可判定：` + `${error instanceof Error ? error.message : String(error)}`,
       )
     }
   }

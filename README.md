@@ -121,7 +121,7 @@ conflict_doctor { scope: "all" | "live" | "profile", profilePath?: string, forma
 
 - **tool id 归属无法 100% 归因。** dsh 的 tool 注册表不记录注册者，公开 API 也拿不到调用方 fiber。所以运行期只报告「冲突名 + 失败行」，跨插件的冲突归属由静态扫描（`defineTool({ name: '...' })` 字面量）补上。动态拼出的 tool 名不在静态视野内。
 - **静默覆盖只能报症状。** `profile/row-config-replaced` 里无法判断被丢掉的那层 config 是否必需——因为语义上就是整段替换。
-- **版本敏感的检查会主动弃权。** 当磁盘副本不是运行中的宿主时，peer / import / engines 三类检查直接跳过并说明原因（见上）。这是刻意的：一次被实测证伪的误报，比十次「可能有问题」更伤信任。
+- **版本敏感的检查有真实基准。** 打包桌面版从自己的 archive 提供 bundle（`dsh-base@0.2.0-rc.2`），而 `profiles/node_modules` 里可能是另一代（`0.1.0-rc.6`）。现在直接从**运行宿主的 archive** 读取版本与导出面，判定为 `archive-authoritative` 后照常比对；只有既无 archive 又无运行版本时才弃权，并在报告里写明原因。详见 [`docs/version-authority.md`](docs/version-authority.md)。
 - **名称类静态提取只认字面量。** `super(ctx, 'name')`、`provide('name')`、`defineTool({ name: '...' })` 能认；拼接出来的名字不能。所以报告措辞是「声明于编译产物」而不是「运行期已注册」。
 - **`engines` / peer 是证据不是因果。** 范围不满足不等于一定坏，但它是「插件调了宿主里不存在的 API」的第一嫌疑人。
 - **`!!js` 不求值。** 审计按原样记录 profile 提供的表达式——求值等于在审计里执行用户代码。因此 `disabled: !!js ...` 这类条件停用无法判定真假，相关行按「未停用」处理。
@@ -132,21 +132,24 @@ conflict_doctor { scope: "all" | "live" | "profile", profilePath?: string, forma
 ```bash
 pnpm install
 pnpm build      # tsc -> lib/
-pnpm test       # 38 项检查：fixture 检测器 + 真实 profile 扫描 + Cordis 集成
+pnpm test       # 63 项检查：fixture 检测器 + asar/导出面 + 真实 profile 扫描 + Cordis 集成
+pnpm check      # 发布与质量门禁：元数据 / 版本 / tarball / 入口 / golden / 性能
 node test/check-metadata.mjs   # 发布元数据：name / engines.dsh / files / peer 声明
 ```
 
-`test/run.mjs` 分三段：**Part A** 每个检测器的正例/反例 fixture（含版本权威性闸门）；**Part B** 对 `$DSH_PROFILE_DIR` 真实 profile 做静态扫描；**Part C** 把 `apply()` 装进真实 Cordis 容器，验证工具/命令/告警注册、`execute` 输出契约、以及卸载后 `ctx.effect` 干净撤销。
+`test/run.mjs` 分五段：**Part A** 每个检测器的正例/反例 fixture（含版本权威性闸门）；**Part B** 对 `$DSH_PROFILE_DIR` 真实 profile 做扫描；**Part C** 把 `apply()` 装进真实 Cordis 容器，验证工具/命令/告警注册、`execute` 输出契约、以及卸载后 `ctx.effect` 干净撤销；**Part D** asar 读取器的合成归档（复刻真实布局，包括那处短 8 字节的 header 字段）；**Part E** 导出面提取与四态判定，含 README 记录的那次误报的回归测试。
 
-`test/emit-report.mjs` 用真实数据写出仓库根目录的 `conflict-doctor-report.md`。
+`test/emit-report.mjs` 用真实数据写出仓库根目录的 `conflict-doctor-report.md`。它不再硬编码宿主版本，因此报告反映的是运行宿主真正的导出面。
 
 ## 路线图
 
 - ~~把 findings 主动播报进系统提示~~ ✅ 已实现（`systemPrompt.context`，无冲突时 0 token）
 - ~~服务级冲突：两个插件提供同一个服务名~~ ✅ 已实现（realm 感知）
 - ~~对「属性级 API 缺失」做真实比对~~ ✅ 已实现（import ↔ 导出面），并在实测中修正了基准错误
+- ~~把版本权威性做彻底~~ ✅ 已实现：零依赖 asar 读取器 + 运行宿主导出面 + 四态判定（`archive-authoritative`）。实测在真实桌面 profile 上把结论从 5 条提升到 42 条，其中 32 条导入冲突经逐一核实为真
 - slot / 客户端侧冲突（需要 Client Provider 配合）
-- **把版本权威性做彻底**：直接从运行宿主的 archive / 解析器拿导出面，而不是拿到版本号就弃权——这样 `stale-disk` 也能给出可信的 API 比对
+- 补丁层语义模拟器：把「config 被替换」升级为键级 provenance，判出被丢掉的层是否必需
 - `live/outbound-tool-collision` 的时序预测：结合 fiber 的 `inject` 等待状态，预告「这一行一旦激活就会撞」
+- `--fail-on` / SARIF 输出，便于在 CI 里当门禁
 
 MIT

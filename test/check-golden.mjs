@@ -60,6 +60,12 @@ function digest(report) {
     authority: report.authority,
     layers: report.layers,
     patchLayers: report.snapshot.layers.length,
+    // W1-19: record WHICH host supplied the version baseline. Without this an
+    // app update changes the findings and the gate reports "drift" with no way
+    // to tell a regression from a new host. With it, the diff names the cause.
+    hostOrigin: report.snapshot.hostOrigin ?? null,
+    hostHostVersion: report.snapshot.hostBundleVersions?.['@deepseek-ai/dsh-base'] ?? null,
+    diskHostVersion: report.snapshot.hostVersion ?? null,
     findings: Object.entries(counts)
       .sort(([a], [b]) => (a < b ? -1 : a > b ? 1 : 0))
       .map(([key, count]) => (count === 1 ? key : `${key} x${count}`)),
@@ -77,8 +83,8 @@ mkdirSync(GOLDEN_DIR, { recursive: true })
 let failed = 0
 for (const dir of dirs) {
   const name = dir.split(/[\\/]/).filter(Boolean).pop()
-  // Version-sensitive detectors abstain without a confirmed host version; pass
-  // none so the comparison reflects what a profile-only audit can prove.
+  // Empty live versions on purpose: this exercises the RUNNING HOST path, so the
+  // golden pins what the archive actually proves — including which host it was.
   const snapshot = collectStatic(dir, [], undefined)
   const findings = detect({ profile: snapshot, nodeVersion: process.version })
   const current = digest({ authority: snapshot.versionAuthority, layers: snapshot.layers.length, snapshot, findings })
@@ -98,6 +104,19 @@ for (const dir of dirs) {
   const added = current.findings.filter((f) => !golden.findings.includes(f))
   const removed = golden.findings.filter((f) => !current.findings.includes(f))
 
+  // A changed host moves the baseline on purpose. Reporting that as plain
+  // "drift" would train the reader to re-record without looking, which is how a
+  // real false positive gets waved through.
+  const hostChanged =
+    (golden.hostHostVersion ?? null) !== current.hostHostVersion || (golden.hostOrigin ?? null) !== current.hostOrigin
+  if (hostChanged) {
+    console.log(
+      `    NOTE host changed since this golden was recorded: ` +
+        `${golden.diskHostVersion ?? '?'} → disk ${current.diskHostVersion ?? '?'}, ` +
+        `running ${golden.hostHostVersion ?? '?'} → ${current.hostHostVersion ?? '?'}`,
+    )
+  }
+
   const codesMatch = added.length === 0 && removed.length === 0
   if (!codesMatch) failed += 1
 
@@ -107,7 +126,11 @@ for (const dir of dirs) {
       (removed.length ? `  -${JSON.stringify(removed)}` : ''),
   )
   if (!codesMatch) {
-    console.log('         A NEW finding on a healthy real profile is a false positive until proven otherwise.')
+    console.log(
+      hostChanged
+        ? '         The host moved, so this may be expected. Confirm each addition is real before re-recording.'
+        : '         A NEW finding on a healthy real profile is a false positive until proven otherwise.',
+    )
     console.log('         Review every addition; re-record only with evidence:')
     console.log(`         node test/check-golden.mjs --update`)
   }

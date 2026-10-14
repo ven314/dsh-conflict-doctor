@@ -2,6 +2,9 @@
   "authority": "archive-authoritative",
   "layers": 13,
   "patchLayers": 13,
+  "hostOrigin": "installed app.asar",
+  "hostHostVersion": "0.2.0-rc.2",
+  "diskHostVersion": "0.1.0-rc.6",
   "findings": [
     "info profile/bundle-unresolved",
     "info profile/module-under-multiple-ids",

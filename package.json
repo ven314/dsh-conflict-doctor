@@ -21,12 +21,13 @@
   "scripts": {
     "build": "tsc -p tsconfig.json",
     "test": "node test/run.mjs",
-    "check": "node test/check-metadata.mjs && node test/check-version.mjs && node test/check-tarball.mjs && node test/check-entry.mjs && node test/check-golden.mjs",
+    "check": "node test/check-metadata.mjs && node test/check-version.mjs && node test/check-tarball.mjs && node test/check-entry.mjs && node test/check-golden.mjs && node test/check-perf.mjs",
     "check:metadata": "node test/check-metadata.mjs",
     "check:version": "node test/check-version.mjs",
     "check:tarball": "node test/check-tarball.mjs",
     "check:entry": "node test/check-entry.mjs",
     "check:golden": "node test/check-golden.mjs",
+    "check:perf": "node test/check-perf.mjs",
     "format": "prettier --write \"**/*.{ts,js,mjs,md,json,yml}\"",
     "format:check": "prettier --check \"**/*.{ts,js,mjs,md,json,yml}\"",
     "prepublishOnly": "pnpm build && pnpm test && node test/check-metadata.mjs && node test/check-version.mjs && node test/check-tarball.mjs && node test/check-entry.mjs && node test/check-golden.mjs"
