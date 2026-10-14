@@ -5,6 +5,7 @@
  * what makes the diagnosis testable without booting a harness.
  * @module dsh-conflict-doctor/types
  */
+import type { RiskLevel } from './fix.js';
 /** How badly a finding hurts. */
 export type Severity = 'critical' | 'warning' | 'info';
 /** One concrete repair step the user can apply as-is. */
@@ -17,6 +18,14 @@ export interface Fix {
     readonly detail: string;
     /** Ready-to-paste patch fragment (for `kind: 'patch'`). */
     readonly snippet?: string;
+    /**
+     * How much this repair changes, COMPUTED from `kind` and `snippet`.
+     *
+     * Populated for every fix that `detect()` returns, so a consumer can tell a
+     * harmless row insertion from one that disables a plugin. Optional in the type
+     * only so hand-written fixtures stay valid; the audit always sets it.
+     */
+    readonly risk?: RiskLevel;
 }
 /** One diagnosed conflict, with evidence and at least one repair. */
 export interface Finding {

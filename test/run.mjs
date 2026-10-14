@@ -28,6 +28,7 @@ import { CONFIDENCE_LABEL, attribute, attributeAll, confidenceCounts } from '../
 import { collectSurface } from '../lib/surface.js'
 import { collectLive } from '../lib/live.js'
 import { evaluateCondition, evaluateExpression } from '../lib/expr.js'
+import { RISK_LABEL, classifyRisk, isAutoApplicable } from '../lib/fix.js'
 import { validateReport } from './check-schema.mjs'
 import { versionsComparable } from '../lib/detect.js'
 import {
@@ -2092,6 +2093,69 @@ await check('J5 the real profile has inject edges and no cycle', () => {
     0,
     'the real profile has no inject cycle',
   )
+})
+
+/* ------------------------------------------------------------------ Part K */
+
+/**
+ * Repair risk grading.
+ *
+ * Nothing was ever applied before, so risk could stay implicit. The moment a fix
+ * can be applied, "how much does this change" must be derived from the snippet
+ * rather than from a hand-written label that drifts away from it.
+ */
+await check('K1 risk is derived from the snippet, not the label', () => {
+  assert.equal(classifyRisk('patch', '- insert:\n    - id: x\n      name: y'), 'safe', 'adding rows changes nothing existing')
+  assert.equal(classifyRisk('patch', '- id: x\n  config: {"a":1}'), 'caution', 'replacing config overwrites an earlier layer')
+  assert.equal(classifyRisk('patch', '- id: x\n  disabled: true'), 'destructive', 'disabling changes what loads')
+  assert.equal(classifyRisk('command', undefined), 'destructive', "a command's effect is invisible to the audit")
+  assert.equal(classifyRisk('manual', undefined), 'safe', 'nothing is applied')
+})
+
+await check('K2 disabled wins over config when a snippet has both', () => {
+  assert.equal(classifyRisk('patch', '- id: x\n  disabled: true\n  config: {"a":1}'), 'destructive')
+})
+
+await check('K3 manual fixes are safe but NOT auto-applicable', () => {
+  // The distinction: `safe` means "cannot break anything", true of a decision
+  // nothing executes. It does NOT mean "apply it for me". An earlier version
+  // checked only the risk level and so treated every manual fix as applicable.
+  const manual = { kind: 'manual', risk: classifyRisk('manual', undefined) }
+  assert.equal(manual.risk, 'safe')
+  assert.equal(isAutoApplicable(manual), false, 'a manual decision has nothing to execute')
+  assert.equal(isAutoApplicable({ kind: 'patch', risk: classifyRisk('patch', '- insert:\n    - id: a') }), true)
+  assert.equal(isAutoApplicable({ kind: 'patch', risk: classifyRisk('patch', '- id: a\n  config: {}') }), true)
+  assert.equal(isAutoApplicable({ kind: 'patch', risk: classifyRisk('patch', '- id: a\n  disabled: true') }), false)
+  assert.equal(isAutoApplicable({ kind: 'command', risk: classifyRisk('command', undefined) }), false)
+})
+
+await check('K4 every fix the audit emits carries a risk', () => {
+  // Not "most fixes" — every one. A consumer gating on `risk` must never meet
+  // undefined, and every finding must keep the fix the contract requires.
+  const profilePath = process.env.DSH_PROFILE_DIR ?? defaultProfilePath()
+  if (profilePath === undefined) return
+  let snapshot
+  try {
+    snapshot = collectStatic(profilePath, [])
+  } catch {
+    return
+  }
+  const findings = detect({ profile: snapshot, nodeVersion: process.version })
+  const fixes = findings.flatMap((finding) => finding.fixes)
+  assert.ok(fixes.length > 0, 'the real profile should produce some fixes')
+  for (const fix of fixes) {
+    assert.ok(
+      fix.risk === 'safe' || fix.risk === 'caution' || fix.risk === 'destructive',
+      `fix "${fix.label}" has no valid risk: ${String(fix.risk)}`,
+    )
+  }
+  for (const finding of findings) assert.ok(finding.fixes.length > 0, `${finding.code} carries no fix`)
+})
+
+await check('K5 every risk level has a consequence-naming label', () => {
+  for (const level of ['safe', 'caution', 'destructive']) {
+    assert.ok(typeof RISK_LABEL[level] === 'string' && RISK_LABEL[level].length > 0, `${level} needs a label`)
+  }
 })
 
 /* ------------------------------------------------------------------ report */

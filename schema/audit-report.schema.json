@@ -67,7 +67,11 @@
         },
         "label": { "type": "string", "minLength": 1 },
         "detail": { "type": "string", "minLength": 1 },
-        "snippet": { "description": "Ready-to-paste patch fragment, for kind `patch`.", "type": "string" }
+        "snippet": { "description": "Ready-to-paste patch fragment, for kind `patch`.", "type": "string" },
+        "risk": {
+          "description": "How much this repair changes, COMPUTED by the audit from `kind` and `snippet` rather than hand-labelled. `safe` adds rows and leaves existing ones alone; `caution` replaces an existing row's config, recoverable from a backup; `destructive` disables or deletes a row, or runs a command, changing what actually loads. Only `patch` fixes graded `safe` or `caution` may be applied without an explicit opt-in.",
+          "enum": ["safe", "caution", "destructive"]
+        }
       }
     },
     "finding": {
