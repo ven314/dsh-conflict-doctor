@@ -2780,6 +2780,86 @@ await check('S1 the summary only fires on a genuine mass, and keeps every detail
   assert.match(evidence, /逐字核对/, 'the verification method must be stated')
 })
 
+/* ------------------------------------------------------------------ Part T */
+
+/**
+ * End-to-end write path on a throwaway profile: real file, real guarded write,
+ * real backup, real rollback.
+ *
+ * This is what `--apply` will do when it is enabled. The profile here is a
+ * temp directory, so the test exercises the whole chain (guard → write →
+ * backup → audit → rollback → re-audit) without touching the user's real
+ * profile.
+ */
+await check('T1 apply → audit clean → rollback → conflict reappears', () => {
+  const dir = mkdtempSync(join(tmpdir(), 'w518-'))
+  const patch = join(dir, 'cordis.patch.yml')
+  const original = [
+    '- id: toggle-row',
+    '  name: pkg-toggle',
+    '  config:',
+    '    a: 1',
+    '- id: toggle-row',
+    '  disabled: true',
+    '- id: toggle-row',
+    '  name: pkg-toggle',
+    '  config:',
+    '    a: 1',
+    '',
+  ].join('\n')
+  writeFileSync(patch, original, 'utf8')
+
+  // Before: the row is disabled then re-inserted in a later layer.
+  const before = detect({ profile: collectStatic(dir, []), nodeVersion: process.version })
+  const finding = before.find((f) => f.code === 'profile/disable-then-reinsert')
+  assert.ok(finding, 'the temp profile must produce a disable-then-reinsert finding')
+  const patchFix = finding.fixes.find((f) => f.kind === 'patch')
+  assert.ok(patchFix?.snippet, 'the finding must carry a patch snippet')
+
+  // The guard must permit a write to the profile's own patch file.
+  assert.equal(guardTarget(dir, patch), undefined, 'the patch file is inside the profile')
+
+  // Apply: append the suggested disable so the LAST layer disables the row.
+  const outcome = writeWithBackup(dir, patch, original + patchFix.snippet + '\n')
+  assert.equal(outcome.ok, true, 'the guarded write must succeed')
+  assert.ok(outcome.bytes > original.length, 'the file must have grown')
+
+  // After: the finding must be gone.
+  const after = detect({ profile: collectStatic(dir, []), nodeVersion: process.version })
+  assert.equal(
+    after.find((f) => f.code === 'profile/disable-then-reinsert'),
+    undefined,
+    'applying the repair must clear the finding',
+  )
+
+  // Rollback: restore from the backup.
+  const rollback = rollbackFromBackup(dir, outcome.backupPath)
+  assert.equal(rollback.ok, true, 'the rollback must succeed')
+  assert.equal(readFileSync(patch, 'utf8'), original, 'the file must be byte-for-byte the original')
+
+  // After rollback: the finding must be back.
+  const back = detect({ profile: collectStatic(dir, []), nodeVersion: process.version })
+  assert.ok(
+    back.find((f) => f.code === 'profile/disable-then-reinsert'),
+    'rolling back must bring the finding back',
+  )
+
+  rmSync(dir, { recursive: true, force: true })
+})
+
+await check('T2 the guard refuses to write outside the profile or into node_modules', () => {
+  const dir = mkdtempSync(join(tmpdir(), 'w518-'))
+  writeFileSync(join(dir, 'cordis.patch.yml'), '- id: x\n', 'utf8')
+  const outside = join(tmpdir(), 'outside-' + Date.now().toString(36) + '.yml')
+  const insideNm = join(dir, 'node_modules', 'pkg', 'cordis.patch.yml')
+
+  assert.ok(guardTarget(dir, outside), 'a path outside the profile must be refused')
+  assert.ok(guardTarget(dir, insideNm), 'a path inside node_modules must be refused')
+  assert.equal(guardTarget(dir, join(dir, 'cordis.patch.yml')), undefined, 'the profile patch is permitted')
+
+  rmSync(dir, { recursive: true, force: true })
+})
+
 /* ------------------------------------------------------------------ report */
 
 console.log(`\n${checks - failures.length}/${checks} checks passed`)
