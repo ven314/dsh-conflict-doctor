@@ -180,21 +180,21 @@ export function findHostRoot(): HostRoot | undefined {
     candidates.push({ root: explicitRoot, kind: 'node-modules', note: 'DSH_HOST_ROOT override' })
   }
 
+  /** Conditionally add a property only when value is not undefined. */
+  function cond<T extends Record<string, unknown>>(obj: T, key: string, value: T[string] | undefined): T {
+    return value !== undefined ? { ...obj, [key]: value } : obj
+  }
+
   for (const candidate of candidates) {
     // An `asar` root keeps dependencies inside the archive, so the modules root
     // is virtualised later by the caller; anything else must have them on disk.
     if (candidate.kind === 'asar') {
-      return {
-        path: candidate.root,
-        kind: candidate.kind,
-        archivePath: candidate.archive,
-        modulesRoot: 'dsh/node_modules',
-        note: candidate.note,
-      }
+      const base = { path: candidate.root, kind: candidate.kind, modulesRoot: 'dsh/node_modules' }
+      return cond(cond(base, 'archivePath', candidate.archive), 'note', candidate.note)
     }
     const modulesRoot = resolveModulesRoot(candidate.root)
     if (modulesRoot !== undefined) {
-      return { path: candidate.root, kind: candidate.kind, modulesRoot, note: candidate.note }
+      return cond({ path: candidate.root, kind: candidate.kind, modulesRoot }, 'note', candidate.note)
     }
   }
   return undefined
