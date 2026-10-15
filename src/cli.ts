@@ -43,7 +43,33 @@ interface CliOptions {
   fixOut?: string
   /** Restore a profile from a backup file created by --apply (not yet implemented). */
   rollback?: string
+  /** Skip the interactive confirmation for --apply (required when not a TTY). */
+  yes?: boolean
   help?: boolean
+}
+
+/**
+ * Whether stdin is an interactive terminal.
+ *
+ * `--apply` asks for confirmation, and a confirmation prompt has nowhere to
+ * go in a CI pipeline. The rule is therefore: an apply is only permitted
+ * interactively, and a non-TTY caller must pass `--yes` to opt in. Detecting
+ * this here, at the boundary, means the rule is one check rather than one
+ * check per write site.
+ */
+export function isInteractive(): boolean {
+  return process.stdin.isTTY === true
+}
+
+/**
+ * Whether a write operation may proceed.
+ *
+ * @param options - the parsed CLI options.
+ * @returns a refusal message, or undefined when the write may proceed.
+ */
+export function confirmWrite(options: CliOptions): string | undefined {
+  if (options.yes === true) return undefined
+  return isInteractive() ? undefined : '非 TTY 环境下写入需要显式传入 --yes（CI 管道里没有地方可以确认）'
 }
 
 /** Parse argv into options, refusing unknown flags rather than ignoring them. */
@@ -94,6 +120,9 @@ function parseArgs(argv: readonly string[]): CliOptions {
         break
       case '--rollback':
         options.rollback = next()
+        break
+      case '--yes':
+        options.yes = true
         break
       case '--help':
       case '-h':

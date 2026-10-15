@@ -75,6 +75,15 @@ const log = (...a) => console.log(...a)
 const step = (title) => log(`\n=== ${title} ===`)
 
 let failures = 0
+/**
+ * What actually happened at the publish step.
+ *
+ * The closing summary used to derive this from the FLAGS alone, so a failed
+ * publish still printed "published dsh-conflict-doctor@<version>" right after
+ * section 3 had printed FAIL. Reporting success from intent rather than outcome
+ * is how a broken release looks green, so the outcome is threaded through here.
+ */
+let publishReport = '(skipped)'
 const check = (label, ok, detail = '') => {
   if (!ok) failures += 1
   log(`  ${ok ? 'OK  ' : 'FAIL'} ${label}${detail ? `  ${detail}` : ''}`)
@@ -107,6 +116,27 @@ function firstExisting(candidates) {
     if (candidate && existsSync(candidate)) return candidate
   }
   return undefined
+}
+
+/**
+ * Format the generated catalog entry to match the repo's prettier config.
+ *
+ * The entry is generated, but it is also a TRACKED file that `pnpm format:check`
+ * covers. Writing it with a hand-rolled quote style meant every release run left
+ * a dirty, gate-failing file behind — `.prettierrc.json` sets `singleQuote: true`
+ * while the `ENTRY_BODY` template used double quotes, so the file flip-flopped on
+ * every run. Normalising right after writing ends that loop.
+ *
+ * prettier is a devDependency, so a release without devDeps installed just skips
+ * this (and the format gate will say so).
+ */
+function normalizeEntry() {
+  const bin = firstExisting([
+    join(ROOT, 'node_modules', 'prettier', 'bin', 'prettier.cjs'),
+    join(ROOT, 'node_modules', 'prettier', 'bin-prettier.js'),
+  ])
+  if (bin === undefined) return false
+  return probe(process.execPath, [bin, '--write', ENTRY_PATH]).ok
 }
 
 /** Spawn pnpm without its Windows shim. */
@@ -294,8 +324,13 @@ async function main() {
 
   // The catalog entry is a deliverable: validate it before it is ever submitted.
   writeFileSync(ENTRY_PATH, ENTRY_BODY)
+  // Keep the tracked file prettier-clean, so a release run does not leave the
+  // format gate red. Done BEFORE validateEntry so the validated bytes are the
+  // exact bytes that would be submitted.
+  const entryFormatted = normalizeEntry()
   const { problems } = validateEntry()
   check('catalog entry valid', problems.length === 0, problems.join('; ') || ENTRY_PATH)
+  if (!entryFormatted) skip('catalog entry formatted', '(prettier not installed — run pnpm install)')
 
   if (failures > 0) {
     log(`\n  ${failures} check(s) failed — stopping.`)
@@ -326,11 +361,18 @@ async function main() {
         check(`tarball has ${required}`, Array.isArray(files) && files.includes(required))
       }
       log('  --dry: nothing published.')
+      publishReport = '(dry run)'
     } else {
       const published = probeNpm(['publish', '--access', 'public'])
       if (check('published', published.ok, published.ok ? '' : published.out.slice(0, 300))) {
         const verify = probeNpm(['view', pkg.name, 'version'])
-        check('registry resolves the new version', verify.ok && verify.out.includes(pkg.version), verify.out.split('\n')[0])
+        const verified = verify.ok && verify.out.includes(pkg.version)
+        check('registry resolves the new version', verified, verify.out.split('\n')[0])
+        publishReport = verified
+          ? `published ${pkg.name}@${pkg.version} (registry verified)`
+          : `publish returned success but the registry does not show ${pkg.version}`
+      } else {
+        publishReport = 'NOT published — the publish step failed, see section 3'
       }
     }
   }
@@ -433,7 +475,7 @@ async function main() {
   /* ----------------------------------------------------------------- summary */
 
   step('5. state')
-  log(`  npm:      ${PUBLISH ? (DRY ? '(dry run)' : `published ${pkg.name}@${pkg.version}`) : '(skipped)'}`)
+  log(`  npm:      ${publishReport}`)
   log(`  repo:     https://github.com/${OWNER}/${REPO}`)
   log(`  entry:    ${ENTRY_PATH}`)
   log(`  catalog:  ${PR ? 'see above' : 'not attempted — run: node release.mjs --pr'}`)
